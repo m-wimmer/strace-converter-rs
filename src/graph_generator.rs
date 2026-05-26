@@ -1,5 +1,6 @@
 
 use crate::syscall_parser;
+use std::collections::HashSet;
 use std::sync::LazyLock;
 use regex::Regex;
 
@@ -40,7 +41,7 @@ use std::io::{BufWriter, Write};
 use std::fs::File;
 
 
-pub fn check_and_write_edge(writer_vec: &mut Vec<BufWriter<File>>,event: &Option<syscall_parser::SystemCall>, node_vec: &mut Vec<String>)
+pub fn check_and_write_edge(writer_vec: &mut Vec<BufWriter<File>>,event: &Option<syscall_parser::SystemCall>, node_vec: &mut HashSet<String>)
 {
 
         // depending on if you have a writer count of 2 or three there is one reserved for tef
@@ -164,13 +165,16 @@ fn write_node(node_name: &String, writer: &mut BufWriter<File>,node_type: NodeTy
     writeln!(writer,"\"{}\",\"{}\"",&node_name,node_type.as_str()).expect("Writing node failed");
 }
 
-fn check_node_store(node_name: &mut String, node_vec: &mut Vec<String>,writer: &mut BufWriter<File>,node_type: NodeType){
+fn check_node_store(node_name: &mut String, node_vec: &mut HashSet<String>,writer: &mut BufWriter<File>,node_type: NodeType){
 
-    if !node_vec.contains(&node_name){
-        //*node_name = node_name.replace(",","_"); // duplicated and not good yer
+    if !node_vec.contains(node_name){
+        //*node_name = node_name.replace(",","_"); 
         //*node_name = node_name.replace("&","_");
+        
         write_node(&node_name, writer, node_type);
-        node_vec.push(node_name.to_string());
+        if !node_vec.insert(node_name.to_string()) {
+            println!("ERR: {node_name} already stored");
+        }
     } else{
         // println!("{node_name} already stored");
 

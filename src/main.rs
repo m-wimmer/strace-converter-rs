@@ -5,6 +5,7 @@
 
 
 mod graph_generator;
+use std::collections::HashSet;
 use std::path::Path;
 use std::fs::File;
 use std::io::{self, BufRead};
@@ -84,7 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
     // vector for merging of unfinished and resumed calls
     let mut syscall_store : Vec<syscall_parser::SystemCall> = Vec::new(); 
     // vec for nodes which are already stored inside the nodes.csv file
-    let mut node_store: Vec<String> = Vec::new(); 
+    let mut node_store: HashSet<String> = HashSet::new(); 
 
     // METRIC: count resumed system calls
     let mut resumed_calls_count = 0;
@@ -192,7 +193,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
 fn read_lines<P>(filename: P) -> io::Result<io::Lines<io::BufReader<File>>>
 where P: AsRef<Path>, {
     let file = File::open(filename)?;
-    Ok(io::BufReader::new(file).lines())
+    Ok(io::BufReader::with_capacity(8*1024*1024,file).lines())
 }
 
 
@@ -200,7 +201,7 @@ where P: AsRef<Path>, {
 fn writer_init(output_file: &String) -> BufWriter<File>{
     let output_file_path = Path::new(output_file);
     let file = File::create(output_file_path).expect("File was not able to be created");
-    let writer = BufWriter::new(file);
+    let writer = BufWriter::with_capacity(8*1024*1024,file);
     writer
 }
 
@@ -266,7 +267,7 @@ fn write_tef(writer: &mut BufWriter<File>, event: &Option<syscall_parser::System
     serde_json::to_writer(&mut *writer,&tef_event).expect("Failed to write JSON");
     writeln!(writer,",").expect("Writing , to file failed");
 }
-fn write_csv(writer_vec: &mut Vec<BufWriter<File>>, event: &Option<syscall_parser::SystemCall>,node_store: &mut Vec<String>){
+fn write_csv(writer_vec: &mut Vec<BufWriter<File>>, event: &Option<syscall_parser::SystemCall>,node_store: &mut HashSet<String>){
     graph_generator::check_and_write_edge(writer_vec,&event,node_store);
 }
 

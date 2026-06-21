@@ -49,19 +49,23 @@ pub enum CallType {
 }
 
 
-pub fn parse(line_num: usize, log_line: &str,resumed_call_cnt: &mut usize, unfinished_call_cnt: &mut usize) -> Option<SystemCall>  
+pub fn parse(line_num: usize, log_line: &str,resumed_call_cnt: &mut usize, unfinished_call_cnt: &mut usize) -> SystemCall 
 {
-
     let (pid,timestamp,rest,pname) = parse_pid_pidname_timestamp(&log_line);
-    let system_call = Some(parse_syscall(line_num,pid,timestamp,rest.to_owned(),pname.to_owned(),resumed_call_cnt,unfinished_call_cnt));
     if rest == ""{
         println!("Parsing of timestamp or PID failed for line {}: {}", line_num + 1, &log_line);
     }
-    system_call?
+    let system_call = parse_syscall(line_num,pid,timestamp,rest.to_owned(),pname.to_owned(),resumed_call_cnt,unfinished_call_cnt);
+    if system_call.is_some() {
+        system_call.unwrap()
+    }else{
+        println!("failed to parse line {}: {:?}",line_num, log_line);
+        std::process::exit(3);
+    }
 }
 
 
-fn make_syscall_struct(line_num: usize, pid:usize, timestamp:u64,procname:String,caps: &regex::Captures, call_type: CallType) -> SystemCall{
+fn make_syscall_struct(pid:usize, timestamp:u64,procname:String,caps: &regex::Captures, call_type: CallType) -> SystemCall{
 
     let mut syscall = SystemCall {
         timestamp: timestamp,
@@ -205,6 +209,10 @@ fn parse_syscall(line_num: usize,pid: usize, timestamp: u64, syscall_string: Str
             Regex::new(r"<\.\.\. (?<call>\S*) resumed>\s*<unfinished \.\.\.>\) = (?<ret>.*)").unwrap(),
             // example 130929 0 <... ppoll resumed> <unfinished ...>) = ?
             // unfinished and resumed call (:
+            //
+            //
+            // fixme merge all resumed system calls into this pattern: <\.\.\. (?<call>\S*) resumed>.(?<args>.*\))? = (?<ret>.*)( <(?<dur>[\d.]*)>)?
+            // Note: requires handling when ? or nothing is returned
 
             ));
 
@@ -212,34 +220,34 @@ fn parse_syscall(line_num: usize,pid: usize, timestamp: u64, syscall_string: Str
 
     // regex capture routine
     if let Some(caps) = syscall_regular.captures(&syscall_string){ 
-        return Some(make_syscall_struct(line_num,pid,timestamp,procname,&caps,CallType::RegularSyscall));
+        return Some(make_syscall_struct(pid,timestamp,procname,&caps,CallType::RegularSyscall));
     }
     else if let Some(caps) = syscall_unfinished.captures(&syscall_string){ 
         *unfinished_call_cnt = *unfinished_call_cnt +1;
-        return Some(make_syscall_struct(line_num,pid,timestamp,procname,&caps,CallType::UnfinishedCall));
+        return Some(make_syscall_struct(pid,timestamp,procname,&caps,CallType::UnfinishedCall));
     }
     else if let Some(caps) = syscall_resumed_args.captures(&syscall_string){ 
         *resumed_call_cnt = *resumed_call_cnt+1;
-        return Some(make_syscall_struct(line_num,pid,timestamp,procname,&caps,CallType::ResumedCallWithArgs));
+        return Some(make_syscall_struct(pid,timestamp,procname,&caps,CallType::ResumedCallWithArgs));
     }
     else if let Some(caps) = syscall_resumed_without_args.captures(&syscall_string){ 
         *resumed_call_cnt = *resumed_call_cnt+1;
-        return Some(make_syscall_struct(line_num,pid,timestamp,procname,&caps,CallType::ResumedCallWithoutArgs));
+        return Some(make_syscall_struct(pid,timestamp,procname,&caps,CallType::ResumedCallWithoutArgs));
     }
     else if let Some(caps) = syscall_without_args.captures(&syscall_string){ 
-        return Some(make_syscall_struct(line_num,pid,timestamp,procname,&caps,CallType::CallWithoutArgs));
+        return Some(make_syscall_struct(pid,timestamp,procname,&caps,CallType::CallWithoutArgs));
     }
     else if let Some(caps) = syscall_wihout_args_and_duration.captures(&syscall_string){ 
-        return Some(make_syscall_struct(line_num,pid,timestamp,procname,&caps,CallType::CallWithoutArgsNoDur));
+        return Some(make_syscall_struct(pid,timestamp,procname,&caps,CallType::CallWithoutArgsNoDur));
     }
     else if let Some(caps) = resumed_without_dur.captures(&syscall_string){ 
         *resumed_call_cnt = *resumed_call_cnt+1;
-        return Some(make_syscall_struct(line_num,pid,timestamp,procname,&caps,CallType::ResumedWithoutDur));
+        return Some(make_syscall_struct(pid,timestamp,procname,&caps,CallType::ResumedWithoutDur));
     }
     else if let Some(caps) = unf_res_call.captures(&syscall_string){ 
         *resumed_call_cnt = *resumed_call_cnt+1;
         *unfinished_call_cnt = *unfinished_call_cnt +1;
-        return Some(make_syscall_struct(line_num,pid,timestamp,procname,&caps,CallType::UnfResCall)); //fixme unfrescall not ideal
+        return Some(make_syscall_struct(pid,timestamp,procname,&caps,CallType::UnfResCall)); //fixme unfrescall not ideal
     }
     else if let Some(caps) = signals_informational.captures(&syscall_string){ 
         // handle signals and strace informational messages seperately since they look different

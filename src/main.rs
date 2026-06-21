@@ -104,12 +104,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
 
             // function to check and or add unfinished or resumed calls
             let event = tef_converter::handle_partial_system_call(&mut syscall_store,event,&mut merge_count);
+            if event.call_type == syscall_parser::CallType::UnfinishedCall{continue} // do not print out unfinished calls until they are finished (drawback is that the order is
+                                                                                                       // not correct anymore). However: "The events do not have to be in timestamp-sorted order" 
+                                                                                                       // -> https://docs.google.com/document/d/1CvAClvFfyA5R-PhYUmn5OOQtYMH4h6I0nSsKchNAySU/preview?tab=t.0
 
-            if event.as_ref().unwrap().call_type == syscall_parser::CallType::UnfinishedCall{continue} // do not print out unfinished calls until they are finished (drawback is that the order is
-                                                                                       // not correct anymore). However: "The events do not have to be in timestamp-sorted order" 
-                                                                                       // -> https://docs.google.com/document/d/1CvAClvFfyA5R-PhYUmn5OOQtYMH4h6I0nSsKchNAySU/preview?tab=t.0
-
-           // write functions according to the selected format
+            // write functions according to the selected format
             match write_format {
                 FormatType::Json => {write_json(&mut writer_vec[0],&event);},
                 FormatType::Tef =>{write_tef(&mut writer_vec[0],&event);} ,
@@ -131,20 +130,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
     // events in TEF or just as nodes and relations in nodes after log was read.
     for event in &syscall_store {
 
-        let event = &Some(event.to_owned());
-
         match write_format {
-            FormatType::Json => {write_json(&mut writer_vec[0],event);},
+            FormatType::Json => {write_json(&mut writer_vec[0],&event);},
             FormatType::Tef =>{write_tef(&mut writer_vec[0],&event);} ,
             FormatType::TefCsv =>{
-                write_tef(&mut writer_vec[0],&event);
-                write_csv(&mut writer_vec,&event,&mut node_store);
+                write_tef(&mut writer_vec[0],event);
+                write_csv(&mut writer_vec,event,&mut node_store);
             },
             FormatType::NoFormat=>{
                 println!("No valid format selected. Exiting");
                 exit(5)} ,
             FormatType::Csv => {
-                write_csv(&mut writer_vec,&event,&mut node_store);
+                write_csv(&mut writer_vec,event,&mut node_store);
             },
             }
 
@@ -258,25 +255,23 @@ fn writers_init(format: &FormatType, output_file: &String,writer_count: usize) -
 }
 
 // write functions for each log file
-fn write_json(writer: &mut BufWriter<File>, event: &Option<syscall_parser::SystemCall>){
+fn write_json(writer: &mut BufWriter<File>, event: &syscall_parser::SystemCall){
     serde_json::to_writer(&mut *writer,&event).expect("Failed to write JSON");
     writeln!(writer,",").expect("Writing , to file failed");
 }
-fn write_tef(writer: &mut BufWriter<File>, event: &Option<syscall_parser::SystemCall>){
+fn write_tef(writer: &mut BufWriter<File>, event: &syscall_parser::SystemCall){
     let tef_event = tef_converter::build_trace_event_format(event);
     serde_json::to_writer(&mut *writer,&tef_event).expect("Failed to write JSON");
     writeln!(writer,",").expect("Writing , to file failed");
 }
-fn write_csv(writer_vec: &mut Vec<BufWriter<File>>, event: &Option<syscall_parser::SystemCall>,node_store: &mut HashSet<String>){
-    graph_generator::check_and_write_edge(writer_vec,&event,node_store);
+fn write_csv(writer_vec: &mut Vec<BufWriter<File>>, event: &syscall_parser::SystemCall,node_store: &mut HashSet<String>){
+    graph_generator::check_and_write_edge(writer_vec,event,node_store);
 }
 
 // debug print that outputs line and system call 
-fn _debug_print(line: &str, event: &Option<syscall_parser::SystemCall>){
+fn _debug_print(line: &str, event: syscall_parser::SystemCall){
     println!("{}",&line);
-    if let Some(event) = &event {
-        println!("{:?}",event.call_type);
-    }
+    println!("{:?}",event.call_type);
 }
 
 

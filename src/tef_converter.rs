@@ -31,7 +31,7 @@ pub fn handle_partial_system_call(syscall_store: &mut Vec<SystemCall>,call: Syst
         }
         else if call.call_type == CallType::ResumedCallWithArgs || call.call_type == CallType::ResumedCallWithoutArgs || call.call_type == CallType::ResumedWithoutDur{
             // receives merged call as ret
-            let call = check_storage(syscall_store, &call,counter);
+            let call = check_storage(syscall_store, call,counter);
             return call;
         }
         return call;
@@ -39,27 +39,26 @@ pub fn handle_partial_system_call(syscall_store: &mut Vec<SystemCall>,call: Syst
 
 // System calls that are unfinished are temporarily stored in a vec until the matching resumed call
 // is found
-fn check_storage(syscall_store: &mut Vec<SystemCall>,resumed_call: &SystemCall,counter: &mut usize) -> SystemCall{
+fn check_storage(syscall_store: &mut Vec<SystemCall>,resumed_call: SystemCall,counter: &mut usize) -> SystemCall{
 
-    let resumed_call_ref = resumed_call;
 
     for (i,stored_syscall) in syscall_store.iter_mut().enumerate()
     {
 
-        if stored_syscall.pid == resumed_call_ref.pid &&
-            stored_syscall.timestamp < resumed_call_ref.timestamp &&
-            stored_syscall.name == resumed_call_ref.name{
+        if stored_syscall.pid == resumed_call.pid &&
+            stored_syscall.timestamp < resumed_call.timestamp &&
+            stored_syscall.name == resumed_call.name{
 
 
                 // we merge into old call to make timestamp and duration make more sense
                 // timestamp when syscall started, duration and such is supplied by the resumed
                 // call
-            stored_syscall.ret = resumed_call_ref.ret.to_owned(); 
-            stored_syscall.dur = resumed_call_ref.dur.to_owned();
-            stored_syscall.successful = resumed_call_ref.successful.to_owned();
+            stored_syscall.ret = resumed_call.ret.to_owned(); 
+            stored_syscall.dur = resumed_call.dur.to_owned();
+            stored_syscall.successful = resumed_call.successful.to_owned();
             // if to catch calls which are resumed but have no duration
             // 47618<IPC I/O Child> 1773146848.562631 <... recvmsg resumed>) = ? <unavailable> 
-            if resumed_call_ref.dur.is_some() {stored_syscall.call_type = CallType::RegularSyscall; }
+            if resumed_call.dur.is_some() {stored_syscall.call_type = CallType::RegularSyscall; }
             else {stored_syscall.call_type = CallType::ResumedWithoutDur}
             let merged_call = stored_syscall.clone();
             // println!("INFO: Merged two trace entries!");
@@ -70,12 +69,10 @@ fn check_storage(syscall_store: &mut Vec<SystemCall>,resumed_call: &SystemCall,c
                 
         }
 
-
     }
     
     // println!("Resumed call could not be matched to unfinished one.. Returned as is: {:?}", resumed_call);
-    let res_call = resumed_call.clone();
-    return res_call;
+    return resumed_call;
 
 }
 

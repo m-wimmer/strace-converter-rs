@@ -35,10 +35,10 @@ impl NodeType{
 
 const PROC_CREATE: [&str;3] = [ "clone", "clone3", "fork" ];
 
-struct Edge{
+struct Edge<'a>{
     process: String,
     target: String,
-    call_name: String,
+    call_name: &'a str,
     timestamp: u64,
     successful: bool,
 }
@@ -69,7 +69,7 @@ pub fn check_and_write_edge(writer_vec: &mut Vec<BufWriter<File>>,event: &syscal
         {
 
             let ret = event.ret.clone()
-                .expect("return value was null when extracting node out of proc create call");
+                .expect("return value was null when extracting target out of proc create call");
 
             let Some((pid,name)) = ret.split_once('<')else{println!("splitting for < failed"); todo!()};
             let name = name.replace(">", "");
@@ -79,13 +79,13 @@ pub fn check_and_write_edge(writer_vec: &mut Vec<BufWriter<File>>,event: &syscal
             check_node_store(&mut ret_node_name,node_vec,&mut writer_vec[node_writer_idx],NodeType::Process);
 
             // check if old name is in store
-            let mut node_name = event.pid.to_string().to_owned() + "-" + &event.procname.to_string();
-            check_node_store(&mut node_name,node_vec,&mut writer_vec[node_writer_idx],NodeType::Process);
+            let mut source = event.pid.to_string().to_owned() + "-" + &event.procname.to_string();
+            check_node_store(&mut source,node_vec,&mut writer_vec[node_writer_idx],NodeType::Process);
 
             write_edge(Edge { 
-                process: event.pid.to_string() + "-" + &event.procname.to_string(),
+                process: source,
                 target: ret_node_name,
-                call_name: event.name.to_owned(),
+                call_name: &event.name,
                 timestamp: event.timestamp,
                 successful: if &event.successful == "successful" {true} else{false}
             } , &mut writer_vec[edge_writer_idx]);
@@ -127,52 +127,37 @@ pub fn check_and_write_edge(writer_vec: &mut Vec<BufWriter<File>>,event: &syscal
         for (pattern,regex) in regex_patterns {
 
             if let Some(caps) = regex.captures(&argument_string) { 
-                    let valid_relation;
-                    let node;
 
-                    (valid_relation,node) = if caps.name("dirfd").is_some() && caps.name("file").is_some(){
-                        let mut file = format!("{}/{}", &caps["dirfd"], &caps["file"]);
-                        check_node_store(&mut file, node_vec,&mut writer_vec[node_writer_idx],NodeType::File);
-                        (true,file)
-                    }
-                    else if caps.name("file").is_some(){
-
-                        check_node_store(&mut caps["file"].to_string(), node_vec,&mut writer_vec[node_writer_idx],NodeType::File);
-                        (true,caps["file"].to_string())
-
-                    }
-                    else if caps.name("network").is_some(){
-
-                            check_node_store(&mut caps["network"].to_string(), node_vec,&mut writer_vec[node_writer_idx],NodeType::Socket);
-                        (true,caps["network"].to_string())
-
-                    }else{(false,"no match".to_string())};
-
-                    if valid_relation{ 
-
-                            let mut node_name = event.pid.to_string().to_owned() + "-" + &event.procname.to_string();
-                            check_node_store(&mut node_name,node_vec,&mut writer_vec[node_writer_idx],NodeType::Process);
-
-                            write_edge(Edge {
-                                process: event.pid.to_string() + "-" + &event.procname.to_string(),
-                                target: node,
-                                call_name: event.name.to_owned(),
-                                timestamp: event.timestamp,
-                                successful: if &event.successful == "successful" {true} else{false},
-                            }, &mut writer_vec[edge_writer_idx]);
-                            
-
-                        match pattern {
-                            EntityPatterns::DirfdFile => {
-                                break;
-                                // exit for loop of regexes to prevent new relations without the
-                                // full path
-                            }
-                            _ => {}
+                    let target = match pattern {
+                        EntityPatterns::DirfdFile => {
+                            let mut file = format!("{}/{}", &caps["dirfd"], &caps["file"]);
+                            check_node_store(&mut file, node_vec,&mut writer_vec[node_writer_idx],NodeType::File);
+                            file
+                        },
+                        EntityPatterns::FileDesc | EntityPatterns::PathName => {
+                           check_node_store(&mut caps["file"].to_string(), node_vec,&mut writer_vec[node_writer_idx],NodeType::File);
+                           caps["file"].to_string()
+                        },
+                        EntityPatterns::Sockets => {
+                           check_node_store(&mut caps["network"].to_string(), node_vec,&mut writer_vec[node_writer_idx],NodeType::Socket);
+                           caps["network"].to_string()
                         }
-                    }
+                    };
+
+                    let mut source = event.pid.to_string() + "-" + &event.procname.to_string();
+                    check_node_store(&mut source,node_vec,&mut writer_vec[node_writer_idx],NodeType::Process);
+
+                    write_edge(Edge {
+                        process: source,
+                        target: target,
+                        call_name: &event.name,
+                        timestamp: event.timestamp,
+                        successful: if &event.successful == "successful" {true} else{false},
+                    }, &mut writer_vec[edge_writer_idx]);
+                    break;
 
                 }
+            // println!("No pattern matched");
 
         }
 

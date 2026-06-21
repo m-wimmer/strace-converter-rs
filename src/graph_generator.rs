@@ -3,6 +3,7 @@ use crate::syscall_parser;
 use std::collections::HashSet;
 use std::sync::LazyLock;
 use regex::Regex;
+use std::borrow::Cow;
 
 pub enum NodeType {
 
@@ -37,7 +38,7 @@ const PROC_CREATE: [&str;3] = [ "clone", "clone3", "fork" ];
 
 struct Edge<'a>{
     process: String,
-    target: String,
+    target: &'a str,
     call_name: &'a str,
     timestamp: u64,
     successful: bool,
@@ -84,11 +85,13 @@ pub fn check_and_write_edge(writer_vec: &mut Vec<BufWriter<File>>,event: &syscal
 
             write_edge(Edge { 
                 process: source,
-                target: ret_node_name,
+                target: &ret_node_name,
                 call_name: &event.name,
                 timestamp: event.timestamp,
                 successful: if &event.successful == "successful" {true} else{false}
             } , &mut writer_vec[edge_writer_idx]);
+
+            // return early when its one of these 3 system calls 
             return;
         }
 
@@ -128,19 +131,22 @@ pub fn check_and_write_edge(writer_vec: &mut Vec<BufWriter<File>>,event: &syscal
 
             if let Some(caps) = regex.captures(&argument_string) { 
 
-                    let target = match pattern {
+                    let target: Cow<'_, str> = match pattern {
                         EntityPatterns::DirfdFile => {
-                            let mut file = format!("{}/{}", &caps["dirfd"], &caps["file"]);
-                            check_node_store(&mut file, node_vec,&mut writer_vec[node_writer_idx],NodeType::File);
-                            file
+                            let file = format!("{}/{}", &caps["dirfd"], &caps["file"]);
+                            check_node_store(&file, node_vec,&mut writer_vec[node_writer_idx],NodeType::File);
+                            // own here due to combining the slices
+                            Cow::Owned(file)
                         },
                         EntityPatterns::FileDesc | EntityPatterns::PathName => {
-                           check_node_store(&mut caps["file"].to_string(), node_vec,&mut writer_vec[node_writer_idx],NodeType::File);
-                           caps["file"].to_string()
+                           let file = &caps["file"];
+                           check_node_store(file, node_vec,&mut writer_vec[node_writer_idx],NodeType::File);
+                           Cow::Borrowed(file)
                         },
                         EntityPatterns::Sockets => {
-                           check_node_store(&mut caps["network"].to_string(), node_vec,&mut writer_vec[node_writer_idx],NodeType::Socket);
-                           caps["network"].to_string()
+                           let socket = &caps["network"];
+                           check_node_store(socket, node_vec,&mut writer_vec[node_writer_idx],NodeType::Socket);
+                           Cow::Borrowed(socket)
                         }
                     };
 
@@ -149,7 +155,7 @@ pub fn check_and_write_edge(writer_vec: &mut Vec<BufWriter<File>>,event: &syscal
 
                     write_edge(Edge {
                         process: source,
-                        target: target,
+                        target: &target,
                         call_name: &event.name,
                         timestamp: event.timestamp,
                         successful: if &event.successful == "successful" {true} else{false},
@@ -169,12 +175,12 @@ fn write_edge(edge: Edge,writer: &mut BufWriter<File>)
     writeln!(writer,"\"{}\",\"{}\",\"{}\",\"{}\",\"{}\"", edge.process,edge.target,edge.call_name,edge.timestamp,edge.successful).expect("writing of relation failed");
 }
 
-fn write_node(node_name: &String, writer: &mut BufWriter<File>,node_type: NodeType)
+fn write_node(node_name: &str, writer: &mut BufWriter<File>,node_type: NodeType)
 {
     writeln!(writer,"\"{}\",\"{}\"",&node_name,node_type.as_str()).expect("Writing node failed");
 }
 
-fn check_node_store(node_name: &mut String, node_vec: &mut HashSet<String>,writer: &mut BufWriter<File>,node_type: NodeType){
+fn check_node_store(node_name: &str, node_vec: &mut HashSet<String>,writer: &mut BufWriter<File>,node_type: NodeType){
 
     if !node_vec.contains(node_name){
         

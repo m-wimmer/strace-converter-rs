@@ -96,25 +96,26 @@ pub fn check_and_write_edge(writer_vec: &mut Vec<BufWriter<File>>,event: &syscal
         }
 
         // lazy initialize of regex so it only compiles once instead of every line 
-        static RE: LazyLock<(Regex,Regex, Regex, Regex)> = LazyLock::new(||  
+        static RE: LazyLock<(Regex, Regex, Regex, Regex)> = LazyLock::new(||  
             (
                 // regex to catch openat and newfstatat before creating duplicate relations 
-                Regex::new(r#"dirfd=\d+<(?<dirfd>/[^>]*)>, pathname="(?<file>[/\S\s]*?)","#).unwrap(), 
+                Regex::new(r#"dirfd=(\d+|AT_FDCWD)<(?<dirfd>/[^>]*)>, pathname="(?<file>[/\S\s]*?)","#).unwrap(), 
 
                 // captures files ( file descriptors )
                 Regex::new(r"\d+<(?<file>/[^>]*)>").unwrap(), 
-                // we need pathname like this for execve
+
+                //  execve(pathname="/usr/binary", ...
                 Regex::new(r#"pathname="(?<file>[/\S\s]*?)","#).unwrap(), 
 
                 // captues sockets
                 Regex::new(r"<(?<network>(TCP|UDP|TCPv6|UDPv6):\[\S*\])>").unwrap(), 
 
             ));
-            let (files_dirfd_pattern,files_pattern,path_pattern,sockets_pattern) = &*RE;
+            let (files_dirfd_pattern,files_pattern,pathname_pattern,sockets_pattern) = &*RE;
             let regex_patterns = [ 
                 (EntityPatterns::DirfdFile, files_dirfd_pattern),
                  (EntityPatterns::FileDesc, files_pattern),
-                  (EntityPatterns::PathName, path_pattern),
+                 (EntityPatterns::PathName, pathname_pattern),
                    (EntityPatterns::Sockets, sockets_pattern) ];
 
             // only search if argument string exists
@@ -132,8 +133,19 @@ pub fn check_and_write_edge(writer_vec: &mut Vec<BufWriter<File>>,event: &syscal
             if let Some(caps) = regex.captures(&argument_string) { 
 
                     let target: Cow<'_, str> = match pattern {
+                        // if path is absolute we dont merge, if not we do
+                        // examples:
+                            // openat(dirfd=AT_FDCWD</home/user>, pathname="file.txt", .... -> merge
+                            // newfstatat(dirfd=4</home/user/folder>, pathname="file.txt", .... -> merge
+                            // openat(dirfd=AT_FDCWD</home/user>, pathname="/etc/passwd", .... -> dont merge
+
                         EntityPatterns::DirfdFile => {
-                            let file = format!("{}/{}", &caps["dirfd"], &caps["file"]);
+                            let file = if caps["file"].starts_with('/') {
+                                caps["file"].to_string()
+                            }
+                            else {
+                                format!("{}/{}", &caps["dirfd"], &caps["file"])
+                            };
                             check_node_store(&file, node_vec,&mut writer_vec[node_writer_idx],NodeType::File);
                             // own here due to combining the slices
                             Cow::Owned(file)

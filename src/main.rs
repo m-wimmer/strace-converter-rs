@@ -8,7 +8,7 @@ mod graph_generator;
 use std::collections::HashSet;
 use std::path::Path;
 use std::fs::File;
-use std::io::{self, BufRead};
+use std::io::{self, BufRead, Seek, SeekFrom};
 use std::process::exit;
 mod syscall_parser;
 mod tef_converter;
@@ -149,6 +149,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
 
         // for json and TEF we need to end the JSON 
         if write_format == FormatType::Json || write_format == FormatType::Tef || write_format== FormatType::TefCsv{
+
+            // function to remove trailing comma
+            remove_trailing_comma(&mut writer_vec[0]);
             writeln!(writer_vec[0],"]").expect("Writing ] to file failed");
             writer_vec[0].flush().expect("Flushing writer failed");
         }
@@ -274,4 +277,13 @@ fn _debug_print(line: &str, event: syscall_parser::SystemCall){
     println!("{:?}",event.call_type);
 }
 
+
+fn remove_trailing_comma(writer: &mut BufWriter<File>) -> isize{
+    // truncating the file and adding ] and } afterward broke imports
+    writer.flush().expect("Flushing writer failed");
+    let file = writer.get_mut();
+    file.seek(SeekFrom::End(-2)).expect("Seeking end of file failed");
+    file.write_all(b"  ").expect("Overwriting of trailing comma failed");
+    return 0;
+}
 

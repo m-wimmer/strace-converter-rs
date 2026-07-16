@@ -5,7 +5,7 @@
  */
 
 use regex::Regex;
-use std::collections::HashMap;
+use std::collections::{BTreeMap};
 use std::str;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -18,7 +18,7 @@ pub struct SystemCall{
     pub timestamp: u64,
     pub pid: usize,
     pub name: String,
-    pub args: Option<HashMap<String, String>>,
+    pub args: Option<BTreeMap<String, String>>,
     #[serde(skip_serializing)]
     pub args_string: Option<String>,
     pub dur: Option<u128>,
@@ -120,7 +120,7 @@ fn make_syscall_struct(pid:usize, timestamp:u64,procname:String,caps: &regex::Ca
 
 fn make_signal_struct(pid:usize,timestamp:u64,procname:String,caps: &regex::Captures, call_type: CallType) -> SystemCall {
 
-    let text_hashmap = Some(HashMap::from([ ("text".to_owned(), caps.name("text").expect("No Signal text found").as_str().to_owned()),]));
+    let text_hashmap = Some(BTreeMap::from([ ("text".to_owned(), caps.name("text").expect("No Signal text found").as_str().to_owned()),]));
 
     let siginfo = SystemCall {
         timestamp: timestamp,
@@ -273,9 +273,9 @@ fn format_ts(timestamp: &str)-> u64{
 }
 
 // basic argument parsing logic including the argument names
-fn parse_args(arg_str: &str) -> HashMap<String, String>
+fn parse_args(arg_str: &str) -> BTreeMap<String, String>
 {
-    let mut map = HashMap::new();
+    let mut map = BTreeMap::new();
     let mut in_quotes = false;
     let mut start = 0;
     let mut key = "".to_string();

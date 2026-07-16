@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::str;
 use crate::syscall_parser::SystemCall;
 use crate::syscall_parser::CallType;
@@ -15,7 +15,7 @@ pub struct TEFSystemCall<'a>{ // make struct according to tef
     #[serde(skip_serializing_if = "Option::is_none")]
     dur: Option<u128>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    args: Option<HashMap<String,String>>,
+    args: Option<BTreeMap<String,String>>,
 }
 
 
@@ -94,7 +94,7 @@ pub fn build_trace_event_format(event: &SystemCall)-> TEFSystemCall<'_>{
                 arguments.insert("ret".to_string(),event.ret.clone().unwrap());
                 arguments
             }else{
-                let mut arguments = HashMap::new();
+                let mut arguments = BTreeMap::new();
                 // println!("Empty args for signal");
                 arguments.insert("ret".to_string(),event.ret.clone().unwrap());
                 arguments
@@ -127,7 +127,7 @@ pub fn build_trace_event_format(event: &SystemCall)-> TEFSystemCall<'_>{
                 if event.ret.is_some() {arguments.insert("ret".to_string(),event.ret.clone().unwrap());}
                 arguments
             }else{
-                let mut arguments = HashMap::new();
+                let mut arguments = BTreeMap::new();
                 // println!("Empty args for signal");
                 if event.ret.is_some() {arguments.insert("ret".to_string(),event.ret.clone().unwrap());}
                 arguments

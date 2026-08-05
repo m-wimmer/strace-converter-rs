@@ -18,6 +18,7 @@ use std::io::{BufWriter, Write};
 
 struct Config{
     arg_parse_val: bool,
+    disable_syscall_merge: bool,
 }
 
 
@@ -37,6 +38,10 @@ struct Cli {
     log_file: Option<String>,
     #[arg(short,long,default_value_t = true,action = clap::ArgAction::SetFalse)]
     no_arg_str_parse: bool,
+    // disable merginge of system calls. stores affected system calls as instant events by default
+    // (resumed and unfinished)
+    #[arg(long,default_value_t = false,action = clap::ArgAction::SetTrue)]
+    disable_syscall_merge: bool,
 }
 
 #[derive(PartialEq)]
@@ -57,6 +62,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
 
     let conf = Config {
         arg_parse_val: args.no_arg_str_parse,
+        disable_syscall_merge: args.disable_syscall_merge,
     };
 
     let write_format; // format arg 
@@ -114,11 +120,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
             // parse system call into struct
             let event = syscall_parser::parse(&conf,i+1, &line,&mut unfinished_calls_count,&mut resumed_calls_count);
 
-            // function to check and or add unfinished or resumed calls
-            let event = tef_converter::handle_partial_system_call(&mut syscall_store,event,&mut merge_count);
-            if event.call_type == syscall_parser::CallType::UnfinishedCall{continue} // do not print out unfinished calls until they are finished (drawback is that the order is
-                                                                                                       // not correct anymore). However: "The events do not have to be in timestamp-sorted order" 
-                                                                                                       // -> https://docs.google.com/document/d/1CvAClvFfyA5R-PhYUmn5OOQtYMH4h6I0nSsKchNAySU/preview?tab=t.0
+            // skip system call merging if cmdline flag was set
+            let event = if conf.disable_syscall_merge == false {
+                // function to check and or add unfinished or resumed calls
+                let event = tef_converter::handle_partial_system_call(&mut syscall_store,event,&mut merge_count);
+                if event.call_type == syscall_parser::CallType::UnfinishedCall{
+                    continue
+                }                                                                       
+                event                                                                      
+            }else{
+                event
+            };
 
             // write functions according to the selected format
             match write_format {

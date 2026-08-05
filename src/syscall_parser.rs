@@ -10,6 +10,8 @@ use std::str;
 use std::sync::LazyLock;
 use std::time::Duration;
 
+use crate::Config;
+
 
 #[derive(Debug)]
 #[derive(serde::Serialize)]
@@ -49,13 +51,13 @@ pub enum CallType {
 }
 
 
-pub fn parse(line_num: usize, log_line: &str,resumed_call_cnt: &mut usize, unfinished_call_cnt: &mut usize) -> SystemCall 
+pub fn parse(config: &Config,line_num: usize, log_line: &str,resumed_call_cnt: &mut usize, unfinished_call_cnt: &mut usize) -> SystemCall 
 {
     let (pid,timestamp,rest,pname) = parse_pid_pidname_timestamp(&log_line);
     if rest == ""{
         println!("Parsing of timestamp or PID failed for line {}: {}", line_num + 1, &log_line);
     }
-    let system_call = parse_syscall(line_num,pid,timestamp,rest.to_owned(),pname.to_owned(),resumed_call_cnt,unfinished_call_cnt);
+    let system_call = parse_syscall(config,line_num,pid,timestamp,rest.to_owned(),pname.to_owned(),resumed_call_cnt,unfinished_call_cnt);
     if system_call.is_some() {
         system_call.unwrap()
     }else{
@@ -65,7 +67,7 @@ pub fn parse(line_num: usize, log_line: &str,resumed_call_cnt: &mut usize, unfin
 }
 
 
-fn make_syscall_struct(pid:usize, timestamp:u64,procname:String,caps: &regex::Captures, call_type: CallType) -> SystemCall{
+fn make_syscall_struct(config: &Config,pid:usize, timestamp:u64,procname:String,caps: &regex::Captures, call_type: CallType) -> SystemCall{
 
     let mut syscall = SystemCall {
         timestamp: timestamp,
@@ -83,8 +85,19 @@ fn make_syscall_struct(pid:usize, timestamp:u64,procname:String,caps: &regex::Ca
 
     if caps.name("args").is_some() {
         let arg_str = caps.name("args").unwrap().as_str();
-        syscall.args = Some(parse_args(&arg_str).to_owned());
+
+        // check if user wants to parse args or not
+        // if not, store whole arg string in one key
+        if config.arg_parse_val==true {
+            syscall.args = Some(parse_args(&arg_str).to_owned());
+        }
+        else {
+            let mut map = BTreeMap::new();
+            map.insert("args".to_owned(), arg_str.to_owned());
+            syscall.args = Some(map);
+        }
         syscall.args_string = Some(arg_str.to_owned());
+
     }
     else {//println!("INFO: LINE {}: No args in: {:?}",line_num,&syscall.call_type)
           }
@@ -167,7 +180,7 @@ fn parse_pid_pidname_timestamp(log_line: &str) -> (usize,u64,&str,&str){
 }
 
 // function to actually parse the rest of the system call (arguments, return values, system call name, duration)
-fn parse_syscall(line_num: usize,pid: usize, timestamp: u64, syscall_string: String, procname: String,resumed_call_cnt: &mut usize, unfinished_call_cnt: &mut usize) -> Option<SystemCall>{
+fn parse_syscall(config: &Config,line_num: usize,pid: usize, timestamp: u64, syscall_string: String, procname: String,resumed_call_cnt: &mut usize, unfinished_call_cnt: &mut usize) -> Option<SystemCall>{
 
     // lazy initialize of regex so it only compiles once regexes instead of every line (due to loop)
     static RE: LazyLock<(Regex, Regex, Regex,Regex, Regex, Regex, Regex, Regex,Regex)> = LazyLock::new(||
@@ -220,34 +233,34 @@ fn parse_syscall(line_num: usize,pid: usize, timestamp: u64, syscall_string: Str
 
     // regex capture routine
     if let Some(caps) = syscall_regular.captures(&syscall_string){ 
-        return Some(make_syscall_struct(pid,timestamp,procname,&caps,CallType::RegularSyscall));
+        return Some(make_syscall_struct(config,pid,timestamp,procname,&caps,CallType::RegularSyscall));
     }
     else if let Some(caps) = syscall_unfinished.captures(&syscall_string){ 
         *unfinished_call_cnt = *unfinished_call_cnt +1;
-        return Some(make_syscall_struct(pid,timestamp,procname,&caps,CallType::UnfinishedCall));
+        return Some(make_syscall_struct(config,pid,timestamp,procname,&caps,CallType::UnfinishedCall));
     }
     else if let Some(caps) = syscall_resumed_args.captures(&syscall_string){ 
         *resumed_call_cnt = *resumed_call_cnt+1;
-        return Some(make_syscall_struct(pid,timestamp,procname,&caps,CallType::ResumedCallWithArgs));
+        return Some(make_syscall_struct(config,pid,timestamp,procname,&caps,CallType::ResumedCallWithArgs));
     }
     else if let Some(caps) = syscall_resumed_without_args.captures(&syscall_string){ 
         *resumed_call_cnt = *resumed_call_cnt+1;
-        return Some(make_syscall_struct(pid,timestamp,procname,&caps,CallType::ResumedCallWithoutArgs));
+        return Some(make_syscall_struct(config,pid,timestamp,procname,&caps,CallType::ResumedCallWithoutArgs));
     }
     else if let Some(caps) = syscall_without_args.captures(&syscall_string){ 
-        return Some(make_syscall_struct(pid,timestamp,procname,&caps,CallType::CallWithoutArgs));
+        return Some(make_syscall_struct(config,pid,timestamp,procname,&caps,CallType::CallWithoutArgs));
     }
     else if let Some(caps) = syscall_wihout_args_and_duration.captures(&syscall_string){ 
-        return Some(make_syscall_struct(pid,timestamp,procname,&caps,CallType::CallWithoutArgsNoDur));
+        return Some(make_syscall_struct(config,pid,timestamp,procname,&caps,CallType::CallWithoutArgsNoDur));
     }
     else if let Some(caps) = resumed_without_dur.captures(&syscall_string){ 
         *resumed_call_cnt = *resumed_call_cnt+1;
-        return Some(make_syscall_struct(pid,timestamp,procname,&caps,CallType::ResumedWithoutDur));
+        return Some(make_syscall_struct(config,pid,timestamp,procname,&caps,CallType::ResumedWithoutDur));
     }
     else if let Some(caps) = unf_res_call.captures(&syscall_string){ 
         *resumed_call_cnt = *resumed_call_cnt+1;
         *unfinished_call_cnt = *unfinished_call_cnt +1;
-        return Some(make_syscall_struct(pid,timestamp,procname,&caps,CallType::UnfResCall)); //fixme unfrescall not ideal
+        return Some(make_syscall_struct(config,pid,timestamp,procname,&caps,CallType::UnfResCall)); //fixme unfrescall not ideal
     }
     else if let Some(caps) = signals_informational.captures(&syscall_string){ 
         // handle signals and strace informational messages seperately since they look different
@@ -275,6 +288,7 @@ fn format_ts(timestamp: &str)-> u64{
 // basic argument parsing logic including the argument names
 fn parse_args(arg_str: &str) -> BTreeMap<String, String>
 {
+    
     let mut map = BTreeMap::new();
     let mut in_quotes = false;
     let mut start = 0;

@@ -16,7 +16,13 @@ use clap::Parser;
 use std::io::{BufWriter, Write};
 
 
+struct Config{
+    arg_parse_val: bool,
+}
+
+
 #[derive(Parser)]
+#[derive(Debug)]
 struct Cli { 
     
     #[arg(short, long)]
@@ -29,6 +35,8 @@ struct Cli {
     parse_arguments: bool,
     #[arg(long)]
     log_file: Option<String>,
+    #[arg(short,long,default_value_t = true,action = clap::ArgAction::SetFalse)]
+    no_arg_str_parse: bool,
 }
 
 #[derive(PartialEq)]
@@ -45,7 +53,11 @@ enum FormatType{
 fn main() -> Result<(), Box<dyn std::error::Error>>{
     // Parse Commandline arguments
     let args = Cli::parse(); 
+    println!("{:?}",args);
 
+    let conf = Config {
+        arg_parse_val: args.no_arg_str_parse,
+    };
 
     let write_format; // format arg 
     let mut writer_count=0;                    
@@ -100,7 +112,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
         for (i, line) in lines.map_while(Result::ok).enumerate() {
 
             // parse system call into struct
-            let event = syscall_parser::parse(i+1, &line,&mut unfinished_calls_count,&mut resumed_calls_count);
+            let event = syscall_parser::parse(&conf,i+1, &line,&mut unfinished_calls_count,&mut resumed_calls_count);
 
             // function to check and or add unfinished or resumed calls
             let event = tef_converter::handle_partial_system_call(&mut syscall_store,event,&mut merge_count);

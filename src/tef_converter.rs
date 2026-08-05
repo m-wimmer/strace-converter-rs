@@ -18,7 +18,6 @@ pub struct TEFSystemCall<'a>{ // make struct according to tef
     args: Option<BTreeMap<String,String>>,
 }
 
-
 // partial system calls (unfinished) are merged with their continuation (resumed) based on their
 // PID, timestamps and call names. In TEF the event is set to be an instant event if no duration
 // was supplied by strace. The timestamp for the merged call is set to the timestamp of the partial

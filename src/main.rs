@@ -38,8 +38,7 @@ struct Cli {
     log_file: Option<String>,
     #[arg(short,long,default_value_t = true,action = clap::ArgAction::SetFalse)]
     no_arg_str_parse: bool,
-    // disable merginge of system calls. stores affected system calls as instant events by default
-    // (resumed and unfinished)
+    /// Disable merginge of system calls. Breaks perfetto UI (i.e., TEF) when resumed calls have duration fields that overlay with system calls during that time period. Only fix would be making them all instant events without duration -> resumed calls with duration would not be visualized with their respective duration (but the field in the arguments remains) (resumed and unfinished)
     #[arg(long,default_value_t = false,action = clap::ArgAction::SetTrue)]
     disable_syscall_merge: bool,
 }

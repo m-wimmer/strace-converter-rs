@@ -5,7 +5,7 @@
 
 
 mod graph_generator;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::fs::File;
 use std::io::{self, BufRead, Seek, SeekFrom};
@@ -118,17 +118,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
         for (i, line) in lines.map_while(Result::ok).enumerate() {
 
             // parse system call into struct
-            let event = syscall_parser::parse(&conf,i+1, &line,&mut resumed_calls_count,&mut unfinished_calls_count);
+            let mut event = syscall_parser::parse(&conf,i+1, &line,&mut resumed_calls_count,&mut unfinished_calls_count);
 
             // skip system call merging if cmdline flag was set
             let event = if conf.disable_syscall_merge == false {
                 // function to check and or add unfinished or resumed calls
-                let event = tef_converter::handle_partial_system_call(&mut syscall_store,event,&mut merge_count);
-                if event.call_type == syscall_parser::CallType::UnfinishedCall{
+                let event_handled = tef_converter::handle_partial_system_call(&mut syscall_store,event,&mut merge_count);
+                if event_handled.call_type == syscall_parser::CallType::UnfinishedCall{
                     continue
                 }                                                                       
-                event                                                                      
+                event_handled                                                                      
             }else{
+                // match arm to add argument that indicates that a call was partial
+                match event.call_type {
+                    syscall_parser::CallType::ResumedCallWithArgs | syscall_parser::CallType::ResumedCallWithoutArgs | syscall_parser::CallType::ResumedWithoutDur => {
+                        event.args
+                            .get_or_insert_with(BTreeMap::new)
+                            .insert("type".to_string(), "res".to_string());
+                        }
+                    syscall_parser::CallType::UnfinishedCall => {
+                        event.args
+                            .get_or_insert_with(BTreeMap::new)
+                            .insert("type".to_string(), "unf".to_string());
+                        },
+                    syscall_parser::CallType::UnfResCall => {
+                        event.args
+                            .get_or_insert_with(BTreeMap::new)
+                            .insert("type".to_string(), "unfres".to_string());
+                        },
+                        syscall_parser::CallType::RegularSyscall | syscall_parser::CallType::CallWithoutArgs | syscall_parser::CallType::CallWithoutArgsNoDur | syscall_parser::CallType::SignalOrInformational => {
+                            // add nothing
+                        },
+                }
+
                 event
             };
 

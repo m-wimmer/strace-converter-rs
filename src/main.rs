@@ -118,7 +118,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
         for (i, line) in lines.map_while(Result::ok).enumerate() {
 
             // parse system call into struct
-            let event = syscall_parser::parse(&conf,i+1, &line,&mut unfinished_calls_count,&mut resumed_calls_count);
+            let event = syscall_parser::parse(&conf,i+1, &line,&mut resumed_calls_count,&mut unfinished_calls_count);
 
             // skip system call merging if cmdline flag was set
             let event = if conf.disable_syscall_merge == false {

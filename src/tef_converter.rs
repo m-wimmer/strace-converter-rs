@@ -57,6 +57,8 @@ fn check_storage(syscall_store: &mut Vec<SystemCall>,resumed_call: SystemCall,co
             stored_syscall.successful = resumed_call.successful.to_owned();
             // if to catch calls which are resumed but have no duration
             // 47618<IPC I/O Child> 1773146848.562631 <... recvmsg resumed>) = ? <unavailable> 
+            // FIXME should implement something to tell merged and normal system calls apart if
+            // merging is disabled (argument?)
             if resumed_call.dur.is_some() {stored_syscall.call_type = CallType::RegularSyscall; }
             else {stored_syscall.call_type = CallType::ResumedWithoutDur}
             let merged_call = stored_syscall.clone();

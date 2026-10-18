@@ -5,7 +5,9 @@
 
 
 mod graph_generator;
-use std::collections::{BTreeMap, HashSet};
+mod argument_iterator;
+pub mod arg_values;
+use std::collections::{HashSet};
 use std::path::Path;
 use std::fs::File;
 use std::io::{self, BufRead, Seek, SeekFrom};
@@ -14,6 +16,8 @@ mod syscall_parser;
 mod tef_converter;
 use clap::Parser;
 use std::io::{BufWriter, Write};
+
+use crate::arg_values::ArgValue;
 
 
 struct Config{
@@ -57,7 +61,7 @@ enum FormatType{
 fn main() -> Result<(), Box<dyn std::error::Error>>{
     // Parse Commandline arguments
     let args = Cli::parse(); 
-    println!("{:?}",args);
+    // println!("{:?}",args);
 
     let conf = Config {
         arg_parse_val: args.no_arg_str_parse,
@@ -100,7 +104,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
 
 
     // vector for merging of unfinished and resumed calls
-    let mut syscall_store : Vec<syscall_parser::SystemCall> = Vec::new(); 
+    let mut syscall_store : Vec<syscall_parser::OwnedSystemCall> = Vec::new(); 
     // vec for nodes which are already stored inside the nodes.csv file
     let mut node_store: HashSet<String> = HashSet::new(); 
 
@@ -120,7 +124,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
             let mut event = syscall_parser::parse(&conf,i+1, &line,&mut resumed_calls_count,&mut unfinished_calls_count);
 
             // skip system call merging if cmdline flag was set
-            let event = if conf.disable_syscall_merge == false {
+            let mut event = if conf.disable_syscall_merge == false {
                 // function to check and or add unfinished or resumed calls
                 let event_handled = tef_converter::handle_partial_system_call(&mut syscall_store,event,&mut merge_count);
                 if event_handled.call_type == syscall_parser::CallType::UnfinishedCall{
@@ -131,19 +135,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
                 // match arm to add argument that indicates that a call was partial
                 match event.call_type {
                     syscall_parser::CallType::ResumedCallWithArgs | syscall_parser::CallType::ResumedCallWithoutArgs | syscall_parser::CallType::ResumedWithoutDur => {
-                        event.args
-                            .get_or_insert_with(BTreeMap::new)
-                            .insert("type".to_string(), "res".to_string());
-                        }
+                        event.args.insert("type", ArgValue::One("res"));
+                        },
                     syscall_parser::CallType::UnfinishedCall => {
-                        event.args
-                            .get_or_insert_with(BTreeMap::new)
-                            .insert("type".to_string(), "unf".to_string());
+                        event.args.insert("type", ArgValue::One("unf"));
                         },
                     syscall_parser::CallType::UnfResCall => {
-                        event.args
-                            .get_or_insert_with(BTreeMap::new)
-                            .insert("type".to_string(), "unfres".to_string());
+                        event.args.insert("type", ArgValue::One("unfres"));
                         },
                         syscall_parser::CallType::RegularSyscall | syscall_parser::CallType::CallWithoutArgs | syscall_parser::CallType::CallWithoutArgsNoDur | syscall_parser::CallType::SignalOrInformational => {
                             // add nothing
@@ -156,9 +154,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
             // write functions according to the selected format
             match write_format {
                 FormatType::Json => {write_json(&mut writer_vec[0],&event);},
-                FormatType::Tef =>{write_tef(&mut writer_vec[0],&event);} ,
+                FormatType::Tef =>{write_tef(&mut writer_vec[0],&mut event);} ,
                 FormatType::TefCsv =>{
-                    write_tef(&mut writer_vec[0],&event);
+                    write_tef(&mut writer_vec[0],&mut event);
                     write_csv(&mut writer_vec,&event,&mut node_store);
                 },
                 FormatType::NoFormat=>{
@@ -168,6 +166,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
                     write_csv(&mut writer_vec,&event,&mut node_store);
                 },
             }
+            // clear merged owned system calls from vec
+            syscall_store.retain(|syscall| !syscall.merged);
 
         }
 
@@ -175,18 +175,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
     // events in TEF or just as nodes and relations in nodes after log was read.
     for event in &syscall_store {
 
+        // conversion here to other struct is probably expensive, but we are already finishing up the
+        // conversion anyway
         match write_format {
-            FormatType::Json => {write_json(&mut writer_vec[0],&event);},
-            FormatType::Tef =>{write_tef(&mut writer_vec[0],&event);} ,
+            FormatType::Json => {write_json(&mut writer_vec[0],&event.into());},
+            FormatType::Tef =>{write_tef(&mut writer_vec[0],&mut event.into());} ,
             FormatType::TefCsv =>{
-                write_tef(&mut writer_vec[0],event);
-                write_csv(&mut writer_vec,event,&mut node_store);
+                write_tef(&mut writer_vec[0],&mut event.into());
+                write_csv(&mut writer_vec,&event.into(),&mut node_store);
             },
             FormatType::NoFormat=>{
                 println!("No valid format selected. Exiting");
                 exit(5)} ,
             FormatType::Csv => {
-                write_csv(&mut writer_vec,event,&mut node_store);
+                write_csv(&mut writer_vec,&event.into(),&mut node_store);
             },
             }
 
@@ -307,7 +309,7 @@ fn write_json(writer: &mut BufWriter<File>, event: &syscall_parser::SystemCall){
     serde_json::to_writer(&mut *writer,&event).expect("Failed to write JSON");
     writeln!(writer,",").expect("Writing , to file failed");
 }
-fn write_tef(writer: &mut BufWriter<File>, event: &syscall_parser::SystemCall){
+fn write_tef(writer: &mut BufWriter<File>, event: &mut syscall_parser::SystemCall){
     let tef_event = tef_converter::build_trace_event_format(event);
     serde_json::to_writer(&mut *writer,&tef_event).expect("Failed to write JSON");
     writeln!(writer,",").expect("Writing , to file failed");

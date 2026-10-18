@@ -10,17 +10,62 @@ use std::str;
 use std::sync::LazyLock;
 use std::time::Duration;
 
-use crate::Config;
+
+use crate::{Config, argument_iterator,arg_values::ArgValue,arg_values::OwnedArgValue};
 
 
 #[derive(Debug)]
 #[derive(serde::Serialize)]
 #[derive(Clone)]
-pub struct SystemCall{
+pub struct SystemCall<'a> {
     pub timestamp: u64,
     pub pid: usize,
     pub name: String,
-    pub args: Option<BTreeMap<String, String>>,
+    pub args: BTreeMap<&'a str, ArgValue<'a>>,
+    #[serde(skip_serializing)]
+    pub args_string: Option<String>,
+    pub dur: Option<u128>,
+    pub ret: Option<&'a str>,
+    #[serde(skip_serializing)]
+    pub call_type: CallType,
+    pub successful: String,
+    #[serde(skip_serializing)]
+    pub procname: String,
+}
+
+impl<'b> From<&'b OwnedSystemCall> for SystemCall<'b> {
+    fn from(syscall: &'b OwnedSystemCall) -> Self {
+        Self {
+            timestamp: syscall.timestamp,
+            pid: syscall.pid,
+            name: syscall.name.clone(),
+            // convert from stored system call to one that is just referenced
+            args: syscall.args.iter().map(|(key,value)| {
+            let key = key.as_str();
+            let value = match value {
+                OwnedArgValue::One(single) => ArgValue::One(single.as_str()),
+                OwnedArgValue::Many(items) => ArgValue::Many(items.into_iter().map(|v| v.as_str()).collect(),)
+                    };
+            (key,value)
+        }).collect(),
+            args_string: syscall.args_string.clone(),
+            dur: syscall.dur.clone(),
+            ret: syscall.ret.as_deref(),
+            call_type: syscall.call_type.clone(),
+            successful: syscall.successful.clone(),
+            procname: syscall.procname.clone(),
+        }
+    }
+}
+
+#[derive(Debug)]
+#[derive(serde::Serialize)]
+#[derive(Clone)]
+pub struct OwnedSystemCall {
+    pub timestamp: u64,
+    pub pid: usize,
+    pub name: String,
+    pub args: BTreeMap<String,OwnedArgValue>,
     #[serde(skip_serializing)]
     pub args_string: Option<String>,
     pub dur: Option<u128>,
@@ -30,8 +75,36 @@ pub struct SystemCall{
     pub successful: String,
     #[serde(skip_serializing)]
     pub procname: String,
+    // flag that is set when an owned system call can be removed after merging. checked when system
+    // call is written
+    pub merged: bool,
 }
 
+impl From<SystemCall<'_>> for OwnedSystemCall {
+    fn from(syscall: SystemCall) -> Self {
+        Self {
+            timestamp: syscall.timestamp,
+            pid: syscall.pid,
+            name: syscall.name,
+            // own all arguments and the map itself
+            args: syscall.args.into_iter().map(|(key,value)| {
+            let key = key.to_owned();
+            let value = match value {
+                ArgValue::One(single) => OwnedArgValue::One(single.to_owned()),
+                ArgValue::Many(items) => OwnedArgValue::Many(items.into_iter().map(|v| v.to_owned()).collect(),)
+                    };
+            (key,value)
+        }).collect(),
+            args_string: syscall.args_string,
+            dur: syscall.dur,
+            ret: syscall.ret.map(|value| value.to_owned()),
+            call_type: syscall.call_type,
+            successful: syscall.successful,
+            procname: syscall.procname,
+            merged: false,
+        }
+    }
+}
 
 // call types which are mapped to different regex patterns
 #[repr(u8)]
@@ -51,13 +124,13 @@ pub enum CallType {
 }
 
 
-pub fn parse(config: &Config,line_num: usize, log_line: &str,resumed_call_cnt: &mut usize, unfinished_call_cnt: &mut usize) -> SystemCall 
+pub fn parse<'a>(config: &Config,line_num: usize, log_line: &'a str,resumed_call_cnt: &mut usize, unfinished_call_cnt: &mut usize) -> SystemCall<'a>
 {
     let (pid,timestamp,rest,pname) = parse_pid_pidname_timestamp(&log_line);
     if rest == ""{
         println!("Parsing of timestamp or PID failed for line {}: {}", line_num + 1, &log_line);
     }
-    let system_call = parse_syscall(config,line_num,pid,timestamp,rest.to_owned(),pname.to_owned(),resumed_call_cnt,unfinished_call_cnt);
+    let system_call = parse_syscall(config,line_num,pid,timestamp,rest,pname.to_owned(),resumed_call_cnt,unfinished_call_cnt);
     if system_call.is_some() {
         system_call.unwrap()
     }else{
@@ -67,13 +140,13 @@ pub fn parse(config: &Config,line_num: usize, log_line: &str,resumed_call_cnt: &
 }
 
 
-fn make_syscall_struct(config: &Config,pid:usize, timestamp:u64,procname:String,caps: &regex::Captures, call_type: CallType) -> SystemCall{
+fn make_syscall_struct<'a>(config: &Config,pid:usize, timestamp:u64,procname:String,caps: regex::Captures<'a>, call_type: CallType) -> SystemCall<'a>{
 
     let mut syscall = SystemCall {
         timestamp: timestamp,
         pid: pid,
         name: caps.name("call").expect("System calls should consist of a name").as_str().to_string(),
-        args: None,
+        args: BTreeMap::new(),
         args_string: None,
         dur: None,
         ret: None,
@@ -89,22 +162,30 @@ fn make_syscall_struct(config: &Config,pid:usize, timestamp:u64,procname:String,
         // check if user wants to parse args or not
         // if not, store whole arg string in one key
         if config.arg_parse_val==true {
-            syscall.args = Some(parse_args(&arg_str).to_owned());
+            parse_args(arg_str.as_bytes());
+            syscall.args = parse_args(&arg_str.as_bytes());
+            // FIXME make this an option or keep it. currently has a bug where on merged calls only
+            // the part of the resumed call is stored.
+            syscall.args.insert("args", ArgValue::One(arg_str));
         }
         else {
             let mut map = BTreeMap::new();
-            map.insert("args".to_owned(), arg_str.to_owned());
-            syscall.args = Some(map);
+            map.insert("args", ArgValue::One(arg_str));
+            syscall.args = map;
         }
         syscall.args_string = Some(arg_str.to_owned());
 
     }
-    else {//println!("INFO: LINE {}: No args in: {:?}",line_num,&syscall.call_type)
-          }
+    else {
+        // empty treemap
+        // Note: needs to happen since args are not an Option in the struct
+        syscall.args = BTreeMap::new()
+
+        }
 
 
     if caps.name("ret").is_some() {
-        let ret_str = caps.name("ret").unwrap().as_str().to_owned();
+        let ret_str = caps.name("ret").unwrap().as_str();
         if ret_str.starts_with("-") {
             syscall.successful = "unsuccessful".to_string();
         }
@@ -131,9 +212,9 @@ fn make_syscall_struct(config: &Config,pid:usize, timestamp:u64,procname:String,
     syscall
 }
 
-fn make_signal_struct(pid:usize,timestamp:u64,procname:String,caps: &regex::Captures, call_type: CallType) -> SystemCall {
+fn make_signal_struct<'a> (pid:usize,timestamp:u64,procname:String,caps: regex::Captures<'a>, call_type: CallType) -> SystemCall<'a> {
 
-    let text_hashmap = Some(BTreeMap::from([ ("text".to_owned(), caps.name("text").expect("No Signal text found").as_str().to_owned()),]));
+    let text_hashmap = BTreeMap::from([ ("text", ArgValue::One(caps.name("text").expect("No Signal text found").as_str())),]);
 
     let siginfo = SystemCall {
         timestamp: timestamp,
@@ -180,7 +261,7 @@ fn parse_pid_pidname_timestamp(log_line: &str) -> (usize,u64,&str,&str){
 }
 
 // function to actually parse the rest of the system call (arguments, return values, system call name, duration)
-fn parse_syscall(config: &Config,line_num: usize,pid: usize, timestamp: u64, syscall_string: String, procname: String,resumed_call_cnt: &mut usize, unfinished_call_cnt: &mut usize) -> Option<SystemCall>{
+fn parse_syscall<'a>(config: &Config,line_num: usize,pid: usize, timestamp: u64, syscall_string: &'a str, procname: String,resumed_call_cnt: &mut usize, unfinished_call_cnt: &mut usize) -> Option<SystemCall<'a>>{
 
     // lazy initialize of regex so it only compiles once regexes instead of every line (due to loop)
     static RE: LazyLock<(Regex, Regex, Regex,Regex, Regex, Regex, Regex, Regex,Regex)> = LazyLock::new(||
@@ -233,38 +314,38 @@ fn parse_syscall(config: &Config,line_num: usize,pid: usize, timestamp: u64, sys
 
     // regex capture routine
     if let Some(caps) = syscall_regular.captures(&syscall_string){ 
-        return Some(make_syscall_struct(config,pid,timestamp,procname,&caps,CallType::RegularSyscall));
+        return Some(make_syscall_struct(config,pid,timestamp,procname,caps,CallType::RegularSyscall));
     }
     else if let Some(caps) = syscall_unfinished.captures(&syscall_string){ 
         *unfinished_call_cnt = *unfinished_call_cnt +1;
-        return Some(make_syscall_struct(config,pid,timestamp,procname,&caps,CallType::UnfinishedCall));
+        return Some(make_syscall_struct(config,pid,timestamp,procname,caps,CallType::UnfinishedCall));
     }
     else if let Some(caps) = syscall_resumed_args.captures(&syscall_string){ 
         *resumed_call_cnt = *resumed_call_cnt+1;
-        return Some(make_syscall_struct(config,pid,timestamp,procname,&caps,CallType::ResumedCallWithArgs));
+        return Some(make_syscall_struct(config,pid,timestamp,procname,caps,CallType::ResumedCallWithArgs));
     }
     else if let Some(caps) = syscall_resumed_without_args.captures(&syscall_string){ 
         *resumed_call_cnt = *resumed_call_cnt+1;
-        return Some(make_syscall_struct(config,pid,timestamp,procname,&caps,CallType::ResumedCallWithoutArgs));
+        return Some(make_syscall_struct(config,pid,timestamp,procname,caps,CallType::ResumedCallWithoutArgs));
     }
     else if let Some(caps) = syscall_without_args.captures(&syscall_string){ 
-        return Some(make_syscall_struct(config,pid,timestamp,procname,&caps,CallType::CallWithoutArgs));
+        return Some(make_syscall_struct(config,pid,timestamp,procname,caps,CallType::CallWithoutArgs));
     }
     else if let Some(caps) = syscall_wihout_args_and_duration.captures(&syscall_string){ 
-        return Some(make_syscall_struct(config,pid,timestamp,procname,&caps,CallType::CallWithoutArgsNoDur));
+        return Some(make_syscall_struct(config,pid,timestamp,procname,caps,CallType::CallWithoutArgsNoDur));
     }
     else if let Some(caps) = resumed_without_dur.captures(&syscall_string){ 
         *resumed_call_cnt = *resumed_call_cnt+1;
-        return Some(make_syscall_struct(config,pid,timestamp,procname,&caps,CallType::ResumedWithoutDur));
+        return Some(make_syscall_struct(config,pid,timestamp,procname,caps,CallType::ResumedWithoutDur));
     }
     else if let Some(caps) = unf_res_call.captures(&syscall_string){ 
         *resumed_call_cnt = *resumed_call_cnt+1;
         *unfinished_call_cnt = *unfinished_call_cnt +1;
-        return Some(make_syscall_struct(config,pid,timestamp,procname,&caps,CallType::UnfResCall)); //fixme unfrescall not ideal
+        return Some(make_syscall_struct(config,pid,timestamp,procname,caps,CallType::UnfResCall)); //fixme unfrescall not ideal
     }
     else if let Some(caps) = signals_informational.captures(&syscall_string){ 
         // handle signals and strace informational messages seperately since they look different
-        return Some(make_signal_struct(pid,timestamp,procname,&caps,CallType::SignalOrInformational));
+        return Some(make_signal_struct(pid,timestamp,procname,caps,CallType::SignalOrInformational));
     }
     println!("ERR: No Regex matched for line {}: {} {} {}", line_num, pid, timestamp, &syscall_string);
     return None;
@@ -285,69 +366,108 @@ fn format_ts(timestamp: &str)-> u64{
     return total_time;
 }
 
-// basic argument parsing logic including the argument names
-fn parse_args(arg_str: &str) -> BTreeMap<String, String>
-{
-    
+
+// get_arg_blocks() -> vec<&str>
+// 1. loop through whole arg string
+// 2. return start,end position of each block or a vector of strings
+fn parse_args<'a>(input_string: &'a [u8]) -> BTreeMap<&'a str,ArgValue<'a>>{
+
     let mut map = BTreeMap::new();
-    let mut in_quotes = false;
-    let mut start = 0;
-    let mut key = "".to_string();
-    let mut is_nested = false;
-    let mut argname_stored = false;
-
-    let args = arg_str.as_bytes();
-    let len = arg_str.len();
-
-    // edge case could happen with resumed calls that start with " -> reference out of index if " is 0 and we check args[i-1]
-    if len >1
-    {
-        for (i,&char) in args.iter().enumerate(){
-
-            if char == b'"' && args[i-1] != b'\\'{ // check if we read chars in quotes "" important, so no }] are interpreted in this section
-
-
-                in_quotes = !in_quotes; 
-
-        }
-        if in_quotes == false{
-
-
-            if char == b'=' && is_nested == false{ // detect arg_name
-                if args[i+1] == b'{' || args[i+1] == b'[' { // check for nested args 
-                    is_nested = true;
+    argument_iterator::parse(input_string).into_iter().for_each(|item| {
+        //println!("{}",std::str::from_utf8(item).unwrap());
+        match get_key(item) {
+            Some((key,key_end_pos)) => {
+                let key = str::from_utf8(key).unwrap();
+                let value = str::from_utf8(get_value(item, key_end_pos+1)).unwrap();
+                if !map.contains_key(key) {
+                    map.insert(key, ArgValue::One(value));
                 }
-                key = str::from_utf8(&args[start..i]).unwrap().to_owned(); // always happens, for unnested
-                argname_stored = true; // arg_names
-                start = i+1;
+                else {
+                    // 1. check if its a one or a many 
+                    // either store the one and push both to a many
+                    // or add the new value to the many
+                    match map.get_mut(key){
+                        Some(ArgValue::One(s)) => {
+                            let mut vec: Vec<&str> = Vec::new();
+                            vec.push(s);
+                            vec.push(value);
+                            map.insert(key, ArgValue::Many(vec));
+                        },
+                        Some(ArgValue::Many(v)) => {
+                            v.push(value)
+                        },
+                        // none should not exist because we have an entry for the key
+                        None => todo!(),
+                    }
                 }
-            if argname_stored == true{
+            },
+            // if a section does not have any key (a '=' character), we land here. right now this
+            // case is not handled yet, but one could just increment a key for it
+            None => {
+                // println!("no key found")
+            },
+        };
+        
+    });
+    map
+}
 
-
-                if char == b',' && is_nested == false { // detect arg_val
-                    map.insert(key.to_owned(),str::from_utf8(&args[start..i]).unwrap().to_owned());
-                    argname_stored = false;
-                    start = i+1;
+fn get_key(separated_arg_string: &[u8]) -> Option<(&[u8],usize)>{
+    // find last = and take everything before it
+    match last_unescaped_equal_char(separated_arg_string){
+        Some(key_end_pos) => {
+            // strip anything before actual key. e.g., abc={[key=val -> strip abc={[ and keep key
+            // if we found no special chars, we just get the whole key (alphanumeric does not work because keys can have underscores_
+            match separated_arg_string[..key_end_pos].iter().rposition(|byte| matches!(byte, b' ' | b'[' |  b'{' | b'=')) {
+                Some(key_start_pos) => {
+                    return Some((&separated_arg_string[key_start_pos+1..key_end_pos],key_end_pos));
                 }
-                if (char == b']' || char == b'}') && i != len -1 && is_nested == true && args[i+1] == b','{
-                    map.insert(key.to_owned(),str::from_utf8(&args[start+1..i]).unwrap().to_owned());
-                    argname_stored = false; // needed to not overwrite 
-                    is_nested = false;
-                    start = i+1;
-                }
-
-                if i == len - 1 {  
-                                   
-                                   
-                    map.insert(key.to_owned(),str::from_utf8(&args[start..i+1]).unwrap().to_owned()); // last args 
-                    argname_stored = false;
-                }
-
+                None => {
+                    return Some((&separated_arg_string[..key_end_pos],key_end_pos));
+                },
             }
-
-        }
-
+        },
+        // FIXME check if NONE actually is happening when there was no value
+        None => return None,
     }
 }
-map
+
+fn get_value(separated_arg_string: &[u8],value_start_pos:usize) -> &[u8]{
+        return &separated_arg_string[value_start_pos..];
 }
+
+// we need this logic instead of iter().rposition(|&b| b == b'=') because buffers could have = signs in them which are unescaped (or rpos would not know about it)
+fn last_unescaped_equal_char(input_string: &[u8]) -> Option<usize>{
+    let mut in_quotes = false;
+    let mut in_arrows = false;
+    let last_idx = input_string.len()-1;
+
+    for (i,&byte) in input_string.iter().rev().enumerate(){
+        // check if we have a value encased in " -> check for \ to see if the " was escaped
+        // itself (then it is part of the value: e.g., " some\"string "
+        if byte == b'"'{
+            if i == last_idx || input_string[last_idx-i-1] != b'\\'{
+                in_quotes = !in_quotes; 
+            }
+        }
+        // everything very similar to iterator, but here we reverse, so < and > are swapped
+        if (!in_quotes && byte == b'>' && !in_arrows) || (!in_quotes && byte == b'<' && in_arrows) {
+            in_arrows = !in_arrows;
+        }
+
+        if !in_quotes && !in_arrows {
+            if byte == b'='{ 
+                return Some(last_idx-i);
+            }
+        }
+        // eol check 
+        if i == input_string.len()-1 {
+            return None;
+        }
+    }
+
+    return None;
+}
+
+
+

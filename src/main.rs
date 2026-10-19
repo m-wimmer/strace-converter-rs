@@ -25,6 +25,10 @@ struct Config{
     disable_syscall_merge: bool,
 }
 
+pub mod keys {
+    pub const ARGS_STRING: &str = "args_string";
+
+}
 
 #[derive(Parser)]
 #[derive(Debug)]

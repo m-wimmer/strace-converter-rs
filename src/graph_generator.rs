@@ -1,4 +1,6 @@
 
+use crate::arg_values::ArgValue;
+use crate::keys::ARGS_STRING;
 use crate::syscall_parser;
 use std::collections::HashSet;
 use std::sync::LazyLock;
@@ -116,19 +118,15 @@ pub fn check_and_write_edge(writer_vec: &mut Vec<BufWriter<File>>,event: &syscal
                  (EntityPatterns::PathName, pathname_pattern),
                    (EntityPatterns::Sockets, sockets_pattern) ];
 
-            // only search if argument string exists
-            let argument_string = if event.args_string.is_some(){
-            event.args_string.to_owned().unwrap()
-            }
-            else{
-                // println!("Cannot generate relations or nodes if no args are provided");
-                // println!("{:?}", event);
-                return;
-            };
+        // only search if argument string exists
+        let Some(ArgValue::One(argument_string)) = event.args.get(ARGS_STRING) else {
+            // println!("Cannot generate relations or nodes if no args are provided");
+            return;
+        };
 
         for (pattern,regex) in regex_patterns {
 
-            if let Some(caps) = regex.captures(&argument_string) { 
+            if let Some(caps) = regex.captures(argument_string) { 
 
                     let target: Cow<'_, str> = match pattern {
                         // if path is absolute we dont merge, if not we do

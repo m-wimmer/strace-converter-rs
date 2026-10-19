@@ -1,6 +1,6 @@
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::str;
+use crate::keys::ARGS_STRING;
 use crate::syscall_parser::OwnedSystemCall;
 use crate::syscall_parser::SystemCall;
 use crate::syscall_parser::CallType;
@@ -46,7 +46,7 @@ pub fn handle_partial_system_call<'a>(syscall_store: &'a mut Vec<OwnedSystemCall
 // is found
 // System calls are transferred to a struct that owns the strings when we need to store them (i.e., unfinished calls)
 // Normally system calls do not own them (struct contains mostly references) to avoid unnecessary allocations
-fn check_storage<'a>(syscall_store: &'a mut Vec<OwnedSystemCall>,resumed_call: SystemCall<'a>,counter: &mut usize) -> SystemCall<'a>{
+fn check_storage<'a>(syscall_store: &'a mut Vec<OwnedSystemCall>,mut resumed_call: SystemCall<'a>,counter: &mut usize) -> SystemCall<'a>{
 
 
     for (_i,stored_syscall) in syscall_store.iter_mut().enumerate()
@@ -67,6 +67,21 @@ fn check_storage<'a>(syscall_store: &'a mut Vec<OwnedSystemCall>,resumed_call: S
             // println!("INFO: Merged two trace entries!");
             *counter = *counter + 1;
 
+            // if unfinished syscall had any args
+            if let Some(OwnedArgValue::One(unf_string)) = stored_syscall.args.get_mut(ARGS_STRING) {
+
+                // if resumed syscall had any args
+                if let Some(ArgValue::One(res_string)) = resumed_call.args.get(ARGS_STRING) {
+                    unf_string.push_str(", ");
+                    unf_string.push_str(res_string);
+                }
+                // else: resumed call had no extra args -> 
+                // remove args_string key either way from resumed call so it does not overwrite 
+                resumed_call.args.remove(ARGS_STRING);
+            }
+            // else: unfinished call had no args -> do nothing
+
+
             //FIXME arg merging works, but the syscall.args_string field is bugged. see
             //syscallsparser.rs
             let merged_call = SystemCall{
@@ -81,8 +96,6 @@ fn check_storage<'a>(syscall_store: &'a mut Vec<OwnedSystemCall>,resumed_call: S
                             };
                     (key,value)
                 }).chain(resumed_call.args.into_iter()).collect(),
-                //FIXME implement arg_string merging
-                args_string: stored_syscall.args_string.as_deref().map(Cow::Borrowed),
                 dur: resumed_call.dur,
                 ret: resumed_call.ret,
                 call_type: stored_syscall.call_type.clone(),

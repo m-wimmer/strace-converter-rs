@@ -9,9 +9,9 @@ use std::collections::{BTreeMap};
 use std::str;
 use std::sync::LazyLock;
 use std::time::Duration;
-use std::borrow::Cow;
 
 
+use crate::keys::ARGS_STRING;
 use crate::{Config, argument_iterator,arg_values::ArgValue,arg_values::OwnedArgValue};
 
 
@@ -23,10 +23,6 @@ pub struct SystemCall<'a> {
     pub pid: usize,
     pub name: &'a str,
     pub args: BTreeMap<&'a str, ArgValue<'a>>,
-    // argstring is Cow because when we merge syscalls we need to add two &str together
-    // FIXME arg_string merging not implemented yet
-    #[serde(skip_serializing)]
-    pub args_string: Option<Cow<'a, str>>,
     pub dur: Option<u128>,
     pub ret: Option<&'a str>,
     #[serde(skip_serializing)]
@@ -51,7 +47,6 @@ impl<'b> From<&'b OwnedSystemCall> for SystemCall<'b> {
                     };
             (key,value)
         }).collect(),
-            args_string: syscall.args_string.as_deref().map(Cow::Borrowed),
             dur: syscall.dur,
             ret: syscall.ret.as_deref(),
             call_type: syscall.call_type.clone(),
@@ -69,8 +64,6 @@ pub struct OwnedSystemCall {
     pub pid: usize,
     pub name: String,
     pub args: BTreeMap<String,OwnedArgValue>,
-    #[serde(skip_serializing)]
-    pub args_string: Option<String>,
     pub dur: Option<u128>,
     pub ret: Option<String>,
     #[serde(skip_serializing)]
@@ -98,7 +91,6 @@ impl From<SystemCall<'_>> for OwnedSystemCall {
                     };
             (key,value)
         }).collect(),
-            args_string: syscall.args_string.map(Cow::into_owned),
             dur: syscall.dur,
             ret: syscall.ret.map(|value| value.to_owned()),
             call_type: syscall.call_type,
@@ -150,7 +142,6 @@ fn make_syscall_struct<'a>(config: &Config,pid:usize, timestamp:u64,procname:&'a
         pid: pid,
         name: caps.name("call").expect("System calls should consist of a name").as_str(),
         args: BTreeMap::new(),
-        args_string: None,
         dur: None,
         ret: None,
         call_type: call_type,
@@ -169,14 +160,13 @@ fn make_syscall_struct<'a>(config: &Config,pid:usize, timestamp:u64,procname:&'a
             syscall.args = parse_args(&arg_str.as_bytes());
             // FIXME make this an option or keep it. currently has a bug where on merged calls only
             // the part of the resumed call is stored.
-            syscall.args.insert("args", ArgValue::One(arg_str));
+            syscall.args.insert(ARGS_STRING, ArgValue::One(arg_str));
         }
         else {
             let mut map = BTreeMap::new();
-            map.insert("args", ArgValue::One(arg_str));
+            map.insert(ARGS_STRING, ArgValue::One(arg_str));
             syscall.args = map;
         }
-        syscall.args_string = Some(Cow::Borrowed(arg_str));
 
     }
     else {
@@ -224,7 +214,6 @@ fn make_signal_struct<'a> (pid:usize,timestamp:u64,procname:&'a str,caps: regex:
         pid: pid,
         name: "Signal",
         args: text_hashmap,
-        args_string: None,
         dur: None,
         ret: None,
         call_type: call_type,

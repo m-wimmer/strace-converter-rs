@@ -9,6 +9,7 @@ use std::collections::{BTreeMap};
 use std::str;
 use std::sync::LazyLock;
 use std::time::Duration;
+use std::borrow::Cow;
 
 
 use crate::{Config, argument_iterator,arg_values::ArgValue,arg_values::OwnedArgValue};
@@ -20,17 +21,19 @@ use crate::{Config, argument_iterator,arg_values::ArgValue,arg_values::OwnedArgV
 pub struct SystemCall<'a> {
     pub timestamp: u64,
     pub pid: usize,
-    pub name: String,
+    pub name: &'a str,
     pub args: BTreeMap<&'a str, ArgValue<'a>>,
+    // argstring is Cow because when we merge syscalls we need to add two &str together
+    // FIXME arg_string merging not implemented yet
     #[serde(skip_serializing)]
-    pub args_string: Option<String>,
+    pub args_string: Option<Cow<'a, str>>,
     pub dur: Option<u128>,
     pub ret: Option<&'a str>,
     #[serde(skip_serializing)]
     pub call_type: CallType,
-    pub successful: String,
+    pub successful: &'a str,
     #[serde(skip_serializing)]
-    pub procname: String,
+    pub procname: &'a str,
 }
 
 impl<'b> From<&'b OwnedSystemCall> for SystemCall<'b> {
@@ -38,7 +41,7 @@ impl<'b> From<&'b OwnedSystemCall> for SystemCall<'b> {
         Self {
             timestamp: syscall.timestamp,
             pid: syscall.pid,
-            name: syscall.name.clone(),
+            name: &syscall.name,
             // convert from stored system call to one that is just referenced
             args: syscall.args.iter().map(|(key,value)| {
             let key = key.as_str();
@@ -48,12 +51,12 @@ impl<'b> From<&'b OwnedSystemCall> for SystemCall<'b> {
                     };
             (key,value)
         }).collect(),
-            args_string: syscall.args_string.clone(),
-            dur: syscall.dur.clone(),
+            args_string: syscall.args_string.as_deref().map(Cow::Borrowed),
+            dur: syscall.dur,
             ret: syscall.ret.as_deref(),
             call_type: syscall.call_type.clone(),
-            successful: syscall.successful.clone(),
-            procname: syscall.procname.clone(),
+            successful: &syscall.successful,
+            procname: &syscall.procname,
         }
     }
 }
@@ -85,7 +88,7 @@ impl From<SystemCall<'_>> for OwnedSystemCall {
         Self {
             timestamp: syscall.timestamp,
             pid: syscall.pid,
-            name: syscall.name,
+            name: syscall.name.to_owned(),
             // own all arguments and the map itself
             args: syscall.args.into_iter().map(|(key,value)| {
             let key = key.to_owned();
@@ -95,12 +98,12 @@ impl From<SystemCall<'_>> for OwnedSystemCall {
                     };
             (key,value)
         }).collect(),
-            args_string: syscall.args_string,
+            args_string: syscall.args_string.map(Cow::into_owned),
             dur: syscall.dur,
             ret: syscall.ret.map(|value| value.to_owned()),
             call_type: syscall.call_type,
-            successful: syscall.successful,
-            procname: syscall.procname,
+            successful: syscall.successful.to_owned(),
+            procname: syscall.procname.to_owned(),
             merged: false,
         }
     }
@@ -130,7 +133,7 @@ pub fn parse<'a>(config: &Config,line_num: usize, log_line: &'a str,resumed_call
     if rest == ""{
         println!("Parsing of timestamp or PID failed for line {}: {}", line_num + 1, &log_line);
     }
-    let system_call = parse_syscall(config,line_num,pid,timestamp,rest,pname.to_owned(),resumed_call_cnt,unfinished_call_cnt);
+    let system_call = parse_syscall(config,line_num,pid,timestamp,rest,pname,resumed_call_cnt,unfinished_call_cnt);
     if system_call.is_some() {
         system_call.unwrap()
     }else{
@@ -140,18 +143,18 @@ pub fn parse<'a>(config: &Config,line_num: usize, log_line: &'a str,resumed_call
 }
 
 
-fn make_syscall_struct<'a>(config: &Config,pid:usize, timestamp:u64,procname:String,caps: regex::Captures<'a>, call_type: CallType) -> SystemCall<'a>{
+fn make_syscall_struct<'a>(config: &Config,pid:usize, timestamp:u64,procname:&'a str,caps: regex::Captures<'a>, call_type: CallType) -> SystemCall<'a>{
 
     let mut syscall = SystemCall {
         timestamp: timestamp,
         pid: pid,
-        name: caps.name("call").expect("System calls should consist of a name").as_str().to_string(),
+        name: caps.name("call").expect("System calls should consist of a name").as_str(),
         args: BTreeMap::new(),
         args_string: None,
         dur: None,
         ret: None,
         call_type: call_type,
-        successful: "unknown".to_string(),
+        successful: "unknown",
         procname: procname,
     };
 
@@ -173,7 +176,7 @@ fn make_syscall_struct<'a>(config: &Config,pid:usize, timestamp:u64,procname:Str
             map.insert("args", ArgValue::One(arg_str));
             syscall.args = map;
         }
-        syscall.args_string = Some(arg_str.to_owned());
+        syscall.args_string = Some(Cow::Borrowed(arg_str));
 
     }
     else {
@@ -187,10 +190,10 @@ fn make_syscall_struct<'a>(config: &Config,pid:usize, timestamp:u64,procname:Str
     if caps.name("ret").is_some() {
         let ret_str = caps.name("ret").unwrap().as_str();
         if ret_str.starts_with("-") {
-            syscall.successful = "unsuccessful".to_string();
+            syscall.successful = "unsuccessful";
         }
         else if !ret_str.starts_with("?"){
-            syscall.successful = "successful".to_string();
+            syscall.successful = "successful";
         }
         syscall.ret = Some(ret_str);
     }
@@ -212,20 +215,20 @@ fn make_syscall_struct<'a>(config: &Config,pid:usize, timestamp:u64,procname:Str
     syscall
 }
 
-fn make_signal_struct<'a> (pid:usize,timestamp:u64,procname:String,caps: regex::Captures<'a>, call_type: CallType) -> SystemCall<'a> {
+fn make_signal_struct<'a> (pid:usize,timestamp:u64,procname:&'a str,caps: regex::Captures<'a>, call_type: CallType) -> SystemCall<'a> {
 
     let text_hashmap = BTreeMap::from([ ("text", ArgValue::One(caps.name("text").expect("No Signal text found").as_str())),]);
 
     let siginfo = SystemCall {
         timestamp: timestamp,
         pid: pid,
-        name: "Signal".to_owned(),
+        name: "Signal",
         args: text_hashmap,
         args_string: None,
         dur: None,
         ret: None,
         call_type: call_type,
-        successful: "unknown".to_string(),
+        successful: "unknown",
         procname: procname,
     };
     siginfo
@@ -261,7 +264,7 @@ fn parse_pid_pidname_timestamp(log_line: &str) -> (usize,u64,&str,&str){
 }
 
 // function to actually parse the rest of the system call (arguments, return values, system call name, duration)
-fn parse_syscall<'a>(config: &Config,line_num: usize,pid: usize, timestamp: u64, syscall_string: &'a str, procname: String,resumed_call_cnt: &mut usize, unfinished_call_cnt: &mut usize) -> Option<SystemCall<'a>>{
+fn parse_syscall<'a>(config: &Config,line_num: usize,pid: usize, timestamp: u64, syscall_string: &'a str, procname: &'a str,resumed_call_cnt: &mut usize, unfinished_call_cnt: &mut usize) -> Option<SystemCall<'a>>{
 
     // lazy initialize of regex so it only compiles once regexes instead of every line (due to loop)
     static RE: LazyLock<(Regex, Regex, Regex,Regex, Regex, Regex, Regex, Regex,Regex)> = LazyLock::new(||
@@ -366,10 +369,19 @@ fn format_ts(timestamp: &str)-> u64{
     return total_time;
 }
 
-
-// get_arg_blocks() -> vec<&str>
+// ARGUMENT LOGIC
 // 1. loop through whole arg string
-// 2. return start,end position of each block or a vector of strings
+// 2. use custom iterator to go through each argument in the line (unescaped commas ',' indicate
+//    it). e.g., key1={key11=val11}, key2=val2
+// 3. get key in each block with get_key
+//  3.1 find last unescaped '=' character 
+//  3.2 dont take any [ or { or other characters BEFORE the key e.g., key1={key11=val11} --> drop: key1={ keep: key11=val11}
+//  3.3 only return the key and not the key-value-pair: key11
+// 4. get value (get_value) using the position where the key ended (key_end_pos). -> val11
+// ( we dont need to remove brackets and such AFTER the value, since the iterator already has the
+// logic for that ) 
+// 5. store key-value pair if key exists 
+//
 fn parse_args<'a>(input_string: &'a [u8]) -> BTreeMap<&'a str,ArgValue<'a>>{
 
     let mut map = BTreeMap::new();

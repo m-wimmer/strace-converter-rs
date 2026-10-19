@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::str;
 use crate::syscall_parser::OwnedSystemCall;
@@ -10,7 +11,7 @@ use crate::{arg_values::ArgValue,arg_values::OwnedArgValue};
 pub struct TEFSystemCall<'a>{ // make struct according to tef
     name: &'a str,
     cat: &'a str,
-    ph: String,
+    ph: &'a str,
     pid: usize,
     tid: usize,
     ts: u64,
@@ -43,6 +44,8 @@ pub fn handle_partial_system_call<'a>(syscall_store: &'a mut Vec<OwnedSystemCall
 
 // System calls that are unfinished are temporarily stored in a vec until the matching resumed call
 // is found
+// System calls are transferred to a struct that owns the strings when we need to store them (i.e., unfinished calls)
+// Normally system calls do not own them (struct contains mostly references) to avoid unnecessary allocations
 fn check_storage<'a>(syscall_store: &'a mut Vec<OwnedSystemCall>,resumed_call: SystemCall<'a>,counter: &mut usize) -> SystemCall<'a>{
 
 
@@ -69,7 +72,7 @@ fn check_storage<'a>(syscall_store: &'a mut Vec<OwnedSystemCall>,resumed_call: S
             let merged_call = SystemCall{
                 timestamp: stored_syscall.timestamp,
                 pid: stored_syscall.pid,
-                name: stored_syscall.name.clone(),
+                name: &stored_syscall.name,
                 args: stored_syscall.args.iter().map(|(key,value)| {
                     let key = key.as_str();
                     let value = match value {
@@ -78,12 +81,13 @@ fn check_storage<'a>(syscall_store: &'a mut Vec<OwnedSystemCall>,resumed_call: S
                             };
                     (key,value)
                 }).chain(resumed_call.args.into_iter()).collect(),
-                args_string: stored_syscall.args_string.clone(),
+                //FIXME implement arg_string merging
+                args_string: stored_syscall.args_string.as_deref().map(Cow::Borrowed),
                 dur: resumed_call.dur,
                 ret: resumed_call.ret,
                 call_type: stored_syscall.call_type.clone(),
                 successful: resumed_call.successful,
-                procname: stored_syscall.procname.clone(),
+                procname: &stored_syscall.procname,
             };
 
             // set flag to delete merged calls after being written in main. 
@@ -118,7 +122,7 @@ pub fn build_trace_event_format<'a>(event: &'a mut SystemCall)-> TEFSystemCall<'
 
                 name: &event.name,
                 cat: &event.successful, 
-                ph: "X".to_string(),
+                ph: "X",
                 ts: event.timestamp,
                 pid: event.pid,
                 tid: event.pid,
@@ -141,7 +145,7 @@ pub fn build_trace_event_format<'a>(event: &'a mut SystemCall)-> TEFSystemCall<'
 
                 name: &event.name,
                 cat: &event.successful,
-                ph: "i".to_string(),
+                ph: "i",
                 ts: event.timestamp,
                 pid: event.pid,
                 tid: event.pid,

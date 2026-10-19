@@ -42,7 +42,7 @@ struct Cli {
     log_file: Option<String>,
     #[arg(short,long,default_value_t = true,action = clap::ArgAction::SetFalse)]
     no_arg_str_parse: bool,
-    /// Disable merginge of system calls. Breaks perfetto UI (i.e., TEF) when resumed calls have duration fields that overlay with system calls during that time period. Only fix would be making them all instant events without duration -> resumed calls with duration would not be visualized with their respective duration (but the field in the arguments remains) (resumed and unfinished)
+    /// Disable merging of system calls. Breaks perfetto UI (i.e., TEF) when resumed calls have duration fields that overlay with system calls during that time period. Only fix would be making them all instant events without duration -> resumed calls with duration would not be visualized with their respective duration (but the field in the arguments remains) (resumed and unfinished)
     #[arg(long,default_value_t = false,action = clap::ArgAction::SetTrue)]
     disable_syscall_merge: bool,
 }
@@ -317,13 +317,6 @@ fn write_tef(writer: &mut BufWriter<File>, event: &mut syscall_parser::SystemCal
 fn write_csv(writer_vec: &mut Vec<BufWriter<File>>, event: &syscall_parser::SystemCall,node_store: &mut HashSet<String>){
     graph_generator::check_and_write_edge(writer_vec,event,node_store);
 }
-
-// debug print that outputs line and system call 
-fn _debug_print(line: &str, event: syscall_parser::SystemCall){
-    println!("{}",&line);
-    println!("{:?}",event.call_type);
-}
-
 
 fn remove_trailing_comma(writer: &mut BufWriter<File>) -> isize{
     // truncating the file and adding ] and } afterward broke imports

@@ -6,11 +6,9 @@ use regex::Regex;
 use std::borrow::Cow;
 
 pub enum NodeType {
-
     Process,
     File,
     Socket,
-
 }
 
 enum EntityPatterns{
@@ -80,7 +78,7 @@ pub fn check_and_write_edge(writer_vec: &mut Vec<BufWriter<File>>,event: &syscal
             check_node_store(&mut ret_node_name,node_vec,&mut writer_vec[node_writer_idx],NodeType::Process);
 
             // check if old name is in store
-            let mut source = event.pid.to_string().to_owned() + "-" + &event.procname.to_string();
+            let mut source = event.pid.to_string() + "-" + &event.procname.to_string();
             check_node_store(&mut source,node_vec,&mut writer_vec[node_writer_idx],NodeType::Process);
 
             write_edge(Edge { 
@@ -88,7 +86,7 @@ pub fn check_and_write_edge(writer_vec: &mut Vec<BufWriter<File>>,event: &syscal
                 target: &ret_node_name,
                 call_name: &event.name,
                 timestamp: event.timestamp,
-                successful: if &event.successful == "successful" {true} else{false}
+                successful: if event.successful == "successful" {true} else{false}
             } , &mut writer_vec[edge_writer_idx]);
 
             // return early when its one of these 3 system calls 
@@ -170,7 +168,7 @@ pub fn check_and_write_edge(writer_vec: &mut Vec<BufWriter<File>>,event: &syscal
                         target: &target,
                         call_name: &event.name,
                         timestamp: event.timestamp,
-                        successful: if &event.successful == "successful" {true} else{false},
+                        successful: if event.successful == "successful" {true} else{false},
                     }, &mut writer_vec[edge_writer_idx]);
                     break;
 

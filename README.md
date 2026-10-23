@@ -1,4 +1,4 @@
-# Strace-converter-rs
+# strace-converter-rs
 
 This is a converter capable of parsing [Strace v6.17](https://github.com/strace/strace) log output for converting to [Trace Event Format (TEF)](https://docs.google.com/document/d/1CvAClvFfyA5R-PhYUmn5OOQtYMH4h6I0nSsKchNAySU/preview?tab=t.0#heading=h.yr4qxyxotyw). 
 

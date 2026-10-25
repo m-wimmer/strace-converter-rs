@@ -45,7 +45,7 @@ struct Cli {
     /// Disable merging of system calls. Breaks perfetto UI (i.e., TEF) when resumed calls have duration fields that overlay with system calls during that time period. Only fix would be making them all instant events without duration -> resumed calls with duration would not be visualized with their respective duration (but the field in the arguments remains) (resumed and unfinished)
     #[arg(long,default_value_t = false,action = clap::ArgAction::SetTrue)]
     disable_syscall_merge: bool,
-    /// thread ids are mapped to pids by checking for clone and clone3 system calls and their flags. 
+    /// EXPERIMENTAL: Thread ids are mapped to pids by checking for clone and clone3 system calls and their flags. 
     #[arg(long,default_value_t = false,action = clap::ArgAction::SetTrue)]
     thread_aware_tef: bool,
 }

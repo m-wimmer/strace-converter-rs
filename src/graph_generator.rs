@@ -80,7 +80,7 @@ pub fn check_and_write_edge(writer_vec: &mut Vec<BufWriter<File>>,event: &syscal
             check_node_store(&mut ret_node_name,node_vec,&mut writer_vec[node_writer_idx],NodeType::Process);
 
             // check if old name is in store
-            let mut source = event.pid.to_string() + "-" + &event.procname.to_string();
+            let mut source = event.tid.to_string() + "-" + &event.procname.to_string();
             check_node_store(&mut source,node_vec,&mut writer_vec[node_writer_idx],NodeType::Process);
 
             write_edge(Edge { 
@@ -158,7 +158,7 @@ pub fn check_and_write_edge(writer_vec: &mut Vec<BufWriter<File>>,event: &syscal
                         }
                     };
 
-                    let mut source = event.pid.to_string() + "-" + &event.procname.to_string();
+                    let mut source = event.tid.to_string() + "-" + &event.procname.to_string();
                     check_node_store(&mut source,node_vec,&mut writer_vec[node_writer_idx],NodeType::Process);
 
                     write_edge(Edge {

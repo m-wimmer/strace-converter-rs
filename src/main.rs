@@ -7,23 +7,19 @@
 mod graph_generator;
 mod argument_iterator;
 pub mod arg_values;
-use std::collections::{HashSet};
+pub mod threads;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::fs::File;
 use std::io::{self, BufRead, Seek, SeekFrom};
 use std::process::exit;
 mod syscall_parser;
+use std::sync::OnceLock;
 mod tef_converter;
 use clap::Parser;
 use std::io::{BufWriter, Write};
 
 use crate::arg_values::ArgValue;
-
-
-struct Config{
-    arg_parse_val: bool,
-    disable_syscall_merge: bool,
-}
 
 pub mod keys {
     pub const ARGS_STRING: &str = "args_string";
@@ -49,7 +45,12 @@ struct Cli {
     /// Disable merging of system calls. Breaks perfetto UI (i.e., TEF) when resumed calls have duration fields that overlay with system calls during that time period. Only fix would be making them all instant events without duration -> resumed calls with duration would not be visualized with their respective duration (but the field in the arguments remains) (resumed and unfinished)
     #[arg(long,default_value_t = false,action = clap::ArgAction::SetTrue)]
     disable_syscall_merge: bool,
+    /// thread ids are mapped to pids by checking for clone and clone3 system calls and their flags. 
+    #[arg(long,default_value_t = false,action = clap::ArgAction::SetTrue)]
+    thread_aware_tef: bool,
 }
+
+static CONFIG: OnceLock<Cli> = OnceLock::new();
 
 #[derive(PartialEq)]
 #[derive(Debug)]
@@ -64,38 +65,37 @@ enum FormatType{
 
 fn main() -> Result<(), Box<dyn std::error::Error>>{
     // Parse Commandline arguments
-    let args = Cli::parse(); 
-    // println!("{:?}",args);
+    // FIXME clean this up
+    let cli_args = Cli::parse(); 
 
-    let conf = Config {
-        arg_parse_val: args.no_arg_str_parse,
-        disable_syscall_merge: args.disable_syscall_merge,
-    };
+    CONFIG.set(Cli::parse()).expect("Config already initialized");
+
+    let conf = CONFIG.get().unwrap();
 
     let write_format; // format arg 
     let mut writer_count=0;                    
 
-    if !Path::new(&args.input_file).exists(){
+    if !Path::new(&cli_args.input_file).exists(){
         println!("Could not read strace log");
         exit(4);
     }
 
-    if args.format.to_lowercase() == "json" {
+    if cli_args.format.to_lowercase() == "json" {
         write_format = FormatType::Json;
         writer_count=1;                    
         // 1 writer
     }
-    else if args.format.to_lowercase() == "tef" {
+    else if cli_args.format.to_lowercase() == "tef" {
         write_format = FormatType::Tef;
         writer_count=1;                    
         // 1 writer
     }
-    else if args.format.to_lowercase() == "csv" {
+    else if cli_args.format.to_lowercase() == "csv" {
         write_format = FormatType::Csv;
         writer_count=2;                    
         // 2 writers 
     }
-    else if args.format.to_lowercase() == "tef-csv" || args.format == "csv-tef" {
+    else if cli_args.format.to_lowercase() == "tef-csv" || cli_args.format == "csv-tef" {
         write_format = FormatType::TefCsv;
         writer_count=3;                    
         // 3 writers 
@@ -104,13 +104,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
         write_format = FormatType::NoFormat;
     }
 
-    let mut writer_vec = writers_init(&write_format, &args.output_file, writer_count);
-
+    let mut writer_vec = writers_init(&write_format, &cli_args.output_file, writer_count);
 
     // vector for merging of unfinished and resumed calls
     let mut syscall_store : Vec<syscall_parser::OwnedSystemCall> = Vec::new(); 
     // vec for nodes which are already stored inside the nodes.csv file
     let mut node_store: HashSet<String> = HashSet::new(); 
+
+    // mapping needed when thread awareness is turned on
+    let mut thread_tid_pid_map = HashMap::<usize,usize>::new();
 
     // METRIC: count resumed system calls
     let mut resumed_calls_count = 0;
@@ -120,12 +122,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
     let mut merge_count = 0;
 
     // read file line by line
-    if let Ok(lines) = read_lines(args.input_file) {
+    if let Ok(lines) = read_lines(cli_args.input_file) {
         
         for (i, line) in lines.map_while(Result::ok).enumerate() {
 
             // parse system call into struct
-            let mut event = syscall_parser::parse(&conf,i+1, &line,&mut resumed_calls_count,&mut unfinished_calls_count);
+            let mut event = syscall_parser::parse(i+1, &line,&mut resumed_calls_count,&mut unfinished_calls_count);
 
             // skip system call merging if cmdline flag was set
             let mut event = if conf.disable_syscall_merge == false {
@@ -158,9 +160,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
             // write functions according to the selected format
             match write_format {
                 FormatType::Json => {write_json(&mut writer_vec[0],&event);},
-                FormatType::Tef =>{write_tef(&mut writer_vec[0],&mut event);} ,
+                FormatType::Tef =>{
+                    write_tef(&mut writer_vec[0],&mut event,&mut thread_tid_pid_map);
+                },
                 FormatType::TefCsv =>{
-                    write_tef(&mut writer_vec[0],&mut event);
+                    write_tef(&mut writer_vec[0],&mut event,&mut thread_tid_pid_map);
                     write_csv(&mut writer_vec,&event,&mut node_store);
                 },
                 FormatType::NoFormat=>{
@@ -183,9 +187,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
         // conversion anyway
         match write_format {
             FormatType::Json => {write_json(&mut writer_vec[0],&event.into());},
-            FormatType::Tef =>{write_tef(&mut writer_vec[0],&mut event.into());} ,
+            FormatType::Tef =>{write_tef(&mut writer_vec[0],&mut event.into(),&mut thread_tid_pid_map);} ,
             FormatType::TefCsv =>{
-                write_tef(&mut writer_vec[0],&mut event.into());
+                write_tef(&mut writer_vec[0],&mut event.into(),&mut thread_tid_pid_map);
                 write_csv(&mut writer_vec,&event.into(),&mut node_store);
             },
             FormatType::NoFormat=>{
@@ -230,9 +234,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
     println!("{},{},{}",unfinished_calls_count ,resumed_calls_count, merge_count);
 
 
-    if args.log_file.is_some() {
+    if cli_args.log_file.is_some() {
         // addition to extract metrics
-        let mut writer = writer_init(&args.log_file.unwrap());
+        let mut writer = writer_init(&cli_args.log_file.unwrap());
         writeln!(writer,"UNFINISHED syscalls, RESUMED syscalls, MERGED syscalls").expect("Writing log data to file failed");
         writeln!(writer,"{},{},{}",unfinished_calls_count ,resumed_calls_count, merge_count).expect("Writing log data to file failed");
         writer.flush().expect("Flushing of a writer failed");
@@ -313,8 +317,8 @@ fn write_json(writer: &mut BufWriter<File>, event: &syscall_parser::SystemCall){
     serde_json::to_writer(&mut *writer,&event).expect("Failed to write JSON");
     writeln!(writer,",").expect("Writing , to file failed");
 }
-fn write_tef(writer: &mut BufWriter<File>, event: &mut syscall_parser::SystemCall){
-    let tef_event = tef_converter::build_trace_event_format(event);
+fn write_tef(writer: &mut BufWriter<File>, event: &mut syscall_parser::SystemCall, pid_tid_map: &mut HashMap<usize,usize>){
+    let tef_event = tef_converter::build_trace_event_format(event,pid_tid_map);
     serde_json::to_writer(&mut *writer,&tef_event).expect("Failed to write JSON");
     writeln!(writer,",").expect("Writing , to file failed");
 }

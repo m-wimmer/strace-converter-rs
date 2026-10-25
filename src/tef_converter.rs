@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::str;
+use crate::CONFIG;
 use crate::keys::ARGS_STRING;
 use crate::syscall_parser::OwnedSystemCall;
 use crate::syscall_parser::SystemCall;
@@ -52,7 +54,7 @@ fn check_storage<'a>(syscall_store: &'a mut Vec<OwnedSystemCall>,mut resumed_cal
     for (_i,stored_syscall) in syscall_store.iter_mut().enumerate()
     {
 
-        if stored_syscall.pid == resumed_call.pid &&
+        if stored_syscall.tid == resumed_call.tid &&
             stored_syscall.timestamp < resumed_call.timestamp &&
             stored_syscall.name == resumed_call.name{
                 // we merge into old call to make timestamp and duration make more sense
@@ -86,7 +88,7 @@ fn check_storage<'a>(syscall_store: &'a mut Vec<OwnedSystemCall>,mut resumed_cal
             //syscallsparser.rs
             let merged_call = SystemCall{
                 timestamp: stored_syscall.timestamp,
-                pid: stored_syscall.pid,
+                tid: stored_syscall.tid,
                 name: &stored_syscall.name,
                 args: stored_syscall.args.iter().map(|(key,value)| {
                     let key = key.as_str();
@@ -119,60 +121,59 @@ fn check_storage<'a>(syscall_store: &'a mut Vec<OwnedSystemCall>,mut resumed_cal
 
 // creates complete (X) or instant (i) TEF events based on the data which could be extracted. All
 // calls without a duration are stored as instant events
-pub fn build_trace_event_format<'a>(event: &'a mut SystemCall)-> TEFSystemCall<'a>{
+pub fn build_trace_event_format<'a>(event: &'a mut SystemCall,thread_pid_tid_map: &mut HashMap<usize,usize>)-> TEFSystemCall<'a>{
 
-    match event.call_type {
+    let conf = CONFIG.get().unwrap();
 
-        CallType::RegularSyscall | CallType::ResumedCallWithArgs | CallType::ResumedCallWithoutArgs | CallType::CallWithoutArgs => {
-
-
-            if event.ret.is_some() {
-                event.args.insert("ret",ArgValue::One(event.ret.unwrap()));
+    let ph_type = match event.call_type {
+        CallType::RegularSyscall 
+            | CallType::ResumedCallWithArgs 
+            | CallType::ResumedCallWithoutArgs 
+            | CallType::CallWithoutArgs => {
+                "X"
             }
 
-
-            let tef_event = TEFSystemCall{
-
-                name: &event.name,
-                cat: &event.successful, 
-                ph: "X",
-                ts: event.timestamp,
-                pid: event.pid,
-                tid: event.pid,
-                args: &event.args,
-                dur: event.dur,
-
-
-            };
-            return tef_event;
-
-        }
-
-        CallType::SignalOrInformational | CallType::CallWithoutArgsNoDur | CallType::UnfinishedCall | CallType::ResumedWithoutDur | CallType::UnfResCall => { //instant events for signals and unfinished calls which were not matched or calls without duration
-
-            if event.ret.is_some() {
-                event.args.insert("ret",ArgValue::One(event.ret.clone().unwrap()));
+        //instant events for signals and unfinished calls which were not matched or calls without duration
+        CallType::SignalOrInformational 
+            | CallType::CallWithoutArgsNoDur 
+            | CallType::UnfinishedCall 
+            | CallType::ResumedWithoutDur 
+            | CallType::UnfResCall => { 
+                "i"
             }
+    };
 
-            let tef_event = TEFSystemCall{
-
-                name: &event.name,
-                cat: &event.successful,
-                ph: "i",
-                ts: event.timestamp,
-                pid: event.pid,
-                tid: event.pid,
-                args: &event.args,
-                dur: event.dur,
-
-
-            };
-            return tef_event;
-       }
-
+    if event.ret.is_some() {
+        event.args.insert("ret",ArgValue::One(event.ret.unwrap()));
     }
 
+    let tef_event = TEFSystemCall{
+
+        name: &event.name,
+        cat: &event.successful, 
+        ph: ph_type,
+        ts: event.timestamp,
+        pid: {
+                // if thread_aware option is set, we check for clone3 or mappings
+                // system calls and map them
+                if conf.thread_aware_tef {
+                    crate::threads::check_for_thread(event, thread_pid_tid_map)
+                }
+                else
+                {
+                    event.tid
+                }
+        },
+        tid: event.tid,
+        args: &event.args,
+        dur: event.dur,
+
+
+    };
+    return tef_event;
+
 }
+
 
 
 

@@ -25,7 +25,7 @@ impl<'a> Iterator for ArgSeperator<'a> {
         for (i,&byte) in remaining.iter().enumerate(){
             // check if we have a value encased in " -> check for \ to see if the " was escaped
             // itself (then it is part of the value: e.g., " some\"string "
-            if byte == b'"' && remaining[i-1] != b'\\'{
+            if byte == b'"' && (i==0 || remaining[i-1] != b'\\'){
                 in_quotes = !in_quotes; 
             }
             //FIXME check if filenames have , (check if they are escaped in strace output)

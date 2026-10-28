@@ -4,6 +4,7 @@
 #[derive(Debug)]
 #[derive(Clone)]
 #[derive(serde::Serialize)]
+#[derive(PartialEq)]
 #[serde(untagged)]
 pub enum ArgValue<'a> {
     One(&'a str),

@@ -6,8 +6,8 @@
 
 mod graph_generator;
 mod argument_iterator;
-pub mod arg_values;
-pub mod threads;
+mod arg_values;
+mod threads;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::fs::File;

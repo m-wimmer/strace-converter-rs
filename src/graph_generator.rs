@@ -7,7 +7,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 use std::borrow::Cow;
 
-pub enum NodeType {
+enum NodeType {
     Process,
     File,
     Socket,

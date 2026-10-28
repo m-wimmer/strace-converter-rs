@@ -439,12 +439,15 @@ fn get_value(separated_arg_string: &[u8],value_start_pos:usize) -> &[u8]{
         return &separated_arg_string[value_start_pos..];
 }
 
+// find last equal character
 // we need this logic instead of iter().rposition(|&b| b == b'=') because buffers could have = signs in them which are unescaped (or rpos would not know about it)
 fn last_unescaped_equal_char(input_string: &[u8]) -> Option<usize>{
     let mut in_quotes = false;
     let mut in_arrows = false;
     let last_idx = input_string.len()-1;
 
+    // abc=5 -> last_idx=4 -> i=1
+    // ret 4-1 = 3
     for (i,&byte) in input_string.iter().rev().enumerate(){
         // check if we have a value encased in " -> check for \ to see if the " was escaped
         // itself (then it is part of the value: e.g., " some\"string "
@@ -474,3 +477,61 @@ fn last_unescaped_equal_char(input_string: &[u8]) -> Option<usize>{
 
 
 
+
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    #[test]
+    fn test_parse_pid_pidname_timestamp() {
+        let log_line = "1937<b2sum> 1782053586.718126 brk(addr=NULL) = 0x5991141a3000 <0.000007>";
+        assert_eq!(parse_pid_pidname_timestamp(log_line),(1937,1782053586718126,"brk(addr=NULL) = 0x5991141a3000 <0.000007>","b2sum"))
+    }
+
+    #[test]
+    fn test_format_ts(){
+        assert_eq!(format_ts("1782053586.718126"),1782053586718126)
+    }
+
+    #[test]
+    fn test_last_unescaped_equal_char(){
+        assert_eq!(last_unescaped_equal_char("abc{[key=val".as_bytes()),Some(8));
+        assert_eq!(last_unescaped_equal_char("abc={[key=val".as_bytes()),Some(9));
+        assert_eq!(last_unescaped_equal_char("abc={[\"key=val\"".as_bytes()),Some(3));
+        assert_eq!(last_unescaped_equal_char("abc={[<key=val>".as_bytes()),Some(3));
+        assert_eq!(last_unescaped_equal_char("abc<=>{[<key=val>".as_bytes()),None);
+    }
+    #[test]
+    fn test_get_key(){
+        assert_eq!(get_key("abc={[key=val".as_bytes()),Some(("key".as_bytes(),9)));
+        assert_eq!(get_key("abc{[keyval".as_bytes()),None);
+        assert_eq!(get_key("[{abc={[\"key=val\"".as_bytes()),Some(("abc".as_bytes(),5)));
+    }
+    #[test]
+    fn test_parse_args(){
+        let arg_string = "addr=0x7f8edd762000, length=69632, prot=PROT_READ, flags=MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, fd=5</usr/lib/libnss_myhostname.so.2>, offset=0x20000";
+        let arg_map = BTreeMap::from([
+            ("addr", ArgValue::One("0x7f8edd762000")),
+            ("length", ArgValue::One("69632")),
+            ("prot", ArgValue::One("PROT_READ")),
+            ("flags", ArgValue::One("MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE")),
+            ("fd", ArgValue::One("5</usr/lib/libnss_myhostname.so.2>")),
+            ("offset", ArgValue::One("0x20000")),
+        ]);
+        assert_eq!(parse_args(arg_string.as_bytes()),arg_map);
+
+        let arg_string = "addr=0x7f8edd762000, length=69632, prot=PROT_READ, flags=MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, fd=5</usr/lib/libnss_myhostname.so.2>, fd=7</usr/lib/test.so.2>, offset=0x20000";
+        let arg_map = BTreeMap::from([
+            ("addr", ArgValue::One("0x7f8edd762000")),
+            ("length", ArgValue::One("69632")),
+            ("prot", ArgValue::One("PROT_READ")),
+            ("flags", ArgValue::One("MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE")),
+            ("fd", ArgValue::Many(Vec::from(["5</usr/lib/libnss_myhostname.so.2>","7</usr/lib/test.so.2>"]))),
+            ("offset", ArgValue::One("0x20000")),
+        ]);
+        assert_eq!(parse_args(arg_string.as_bytes()),arg_map);
+    }
+    //FIXME missing function tests: make_syscall_struct, make_signal_struct, parse_syscall, parse
+}

@@ -62,11 +62,8 @@ enum FormatType{
     NoFormat,
 } 
 
-
 fn main() -> Result<(), Box<dyn std::error::Error>>{
     // Parse Commandline arguments
-    // FIXME clean this up
-    let cli_args = Cli::parse(); 
 
     CONFIG.set(Cli::parse()).expect("Config already initialized");
 
@@ -75,27 +72,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
     let write_format; // format arg 
     let mut writer_count=0;                    
 
-    if !Path::new(&cli_args.input_file).exists(){
+    if !Path::new(&conf.input_file).exists(){
         println!("Could not read strace log");
         exit(4);
     }
 
-    if cli_args.format.to_lowercase() == "json" {
+    if conf.format.to_lowercase() == "json" {
         write_format = FormatType::Json;
         writer_count=1;                    
         // 1 writer
     }
-    else if cli_args.format.to_lowercase() == "tef" {
+    else if conf.format.to_lowercase() == "tef" {
         write_format = FormatType::Tef;
         writer_count=1;                    
         // 1 writer
     }
-    else if cli_args.format.to_lowercase() == "csv" {
+    else if conf.format.to_lowercase() == "csv" {
         write_format = FormatType::Csv;
         writer_count=2;                    
         // 2 writers 
     }
-    else if cli_args.format.to_lowercase() == "tef-csv" || cli_args.format == "csv-tef" {
+    else if conf.format.to_lowercase() == "tef-csv" || conf.format == "csv-tef" {
         write_format = FormatType::TefCsv;
         writer_count=3;                    
         // 3 writers 
@@ -104,7 +101,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
         write_format = FormatType::NoFormat;
     }
 
-    let mut writer_vec = writers_init(&write_format, &cli_args.output_file, writer_count);
+    let mut writer_vec = writers_init(&write_format, &conf.output_file, writer_count);
 
     // vector for merging of unfinished and resumed calls
     let mut syscall_store : Vec<syscall_parser::OwnedSystemCall> = Vec::new(); 
@@ -122,7 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
     let mut merge_count = 0;
 
     // read file line by line
-    if let Ok(lines) = read_lines(cli_args.input_file) {
+    if let Ok(lines) = read_lines(conf.input_file.clone()) {
         
         for (i, line) in lines.map_while(Result::ok).enumerate() {
 
@@ -234,9 +231,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
     println!("{},{},{}",unfinished_calls_count ,resumed_calls_count, merge_count);
 
 
-    if cli_args.log_file.is_some() {
+    if conf.log_file.is_some() {
         // addition to extract metrics
-        let mut writer = writer_init(&cli_args.log_file.unwrap());
+        let mut writer = writer_init(&conf.log_file.as_ref().unwrap());
         writeln!(writer,"UNFINISHED syscalls, RESUMED syscalls, MERGED syscalls").expect("Writing log data to file failed");
         writeln!(writer,"{},{},{}",unfinished_calls_count ,resumed_calls_count, merge_count).expect("Writing log data to file failed");
         writer.flush().expect("Flushing of a writer failed");
@@ -253,7 +250,7 @@ where P: AsRef<Path>, {
 
 
 // generic initialize writer
-fn writer_init(output_file: &String) -> BufWriter<File>{
+fn writer_init(output_file: &str) -> BufWriter<File>{
     let output_file_path = Path::new(output_file);
     let file = File::create(output_file_path).expect("File was not able to be created");
     let writer = BufWriter::with_capacity(8*1024*1024,file);

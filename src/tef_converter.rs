@@ -121,7 +121,7 @@ fn merge_arg_string_argument(unf_call: &mut OwnedSystemCall, res_call: &mut Syst
 
 // creates complete (X) or instant (i) TEF events based on the data which could be extracted. All
 // calls without a duration are stored as instant events
-fn build_trace_event_format_impl<'a>(conf: &crate::Cli,event: &'a mut SystemCall,thread_pid_tid_map: &mut HashMap<usize,usize>)-> TEFSystemCall<'a>{
+pub fn build_trace_event_format_impl<'a>(conf: &crate::Cli,event: &'a mut SystemCall,thread_pid_tid_map: &mut HashMap<usize,usize>)-> TEFSystemCall<'a>{
 
 
     let ph_type = match event.call_type {
@@ -173,8 +173,8 @@ fn build_trace_event_format_impl<'a>(conf: &crate::Cli,event: &'a mut SystemCall
 
 }
 // abstraction to simplify testing due to oncelock
-pub fn build_trace_event_format<'a>(event: &'a mut SystemCall,thread_pid_tid_map: &mut HashMap<usize,usize>){
-    build_trace_event_format_impl(CONFIG.get().expect("Config not initialized"),event,thread_pid_tid_map);
+pub fn build_trace_event_format<'a>(event: &'a mut SystemCall,thread_pid_tid_map: &mut HashMap<usize,usize>) -> TEFSystemCall<'a>{
+    return build_trace_event_format_impl(CONFIG.get().expect("Config not initialized"),event,thread_pid_tid_map);
 }
 
 #[cfg(test)]

@@ -9,7 +9,7 @@ use crate::syscall_parser::CallType;
 use crate::{arg_values::ArgValue,arg_values::OwnedArgValue};
 
 #[derive(serde::Serialize)]
-#[derive(Debug)]
+#[derive(Debug,PartialEq)]
 pub struct TEFSystemCall<'a>{ // make struct according to tef
     name: &'a str,
     cat: &'a str,
@@ -50,7 +50,6 @@ pub fn handle_partial_system_call<'a>(syscall_store: &'a mut Vec<OwnedSystemCall
 // Normally system calls do not own them (struct contains mostly references) to avoid unnecessary allocations
 fn check_storage<'a>(syscall_store: &'a mut Vec<OwnedSystemCall>,mut resumed_call: SystemCall<'a>,counter: &mut usize) -> SystemCall<'a>{
 
-
     for (_i,stored_syscall) in syscall_store.iter_mut().enumerate()
     {
 
@@ -69,23 +68,8 @@ fn check_storage<'a>(syscall_store: &'a mut Vec<OwnedSystemCall>,mut resumed_cal
             // println!("INFO: Merged two trace entries!");
             *counter = *counter + 1;
 
-            // if unfinished syscall had any args
-            if let Some(OwnedArgValue::One(unf_string)) = stored_syscall.args.get_mut(ARGS_STRING) {
+            merge_arg_string_argument(stored_syscall,&mut resumed_call);
 
-                // if resumed syscall had any args
-                if let Some(ArgValue::One(res_string)) = resumed_call.args.get(ARGS_STRING) {
-                    unf_string.push_str(", ");
-                    unf_string.push_str(res_string);
-                }
-                // else: resumed call had no extra args -> 
-                // remove args_string key either way from resumed call so it does not overwrite 
-                resumed_call.args.remove(ARGS_STRING);
-            }
-            // else: unfinished call had no args -> do nothing
-
-
-            //FIXME arg merging works, but the syscall.args_string field is bugged. see
-            //syscallsparser.rs
             let merged_call = SystemCall{
                 timestamp: stored_syscall.timestamp,
                 tid: stored_syscall.tid,
@@ -118,12 +102,27 @@ fn check_storage<'a>(syscall_store: &'a mut Vec<OwnedSystemCall>,mut resumed_cal
 
 }
 
+fn merge_arg_string_argument(unf_call: &mut OwnedSystemCall, res_call: &mut SystemCall){
+    // if unfinished syscall had any args
+    if let Some(OwnedArgValue::One(unf_string)) = unf_call.args.get_mut(ARGS_STRING) {
+
+        // if resumed syscall had any args
+        if let Some(ArgValue::One(res_string)) = res_call.args.get(ARGS_STRING) {
+            unf_string.push_str(", ");
+            unf_string.push_str(res_string);
+        }
+        // else: resumed call had no extra args -> 
+        // remove args_string key either way from resumed call so it does not overwrite 
+        res_call.args.remove(ARGS_STRING);
+    }
+    // else: unfinished call had no args -> do nothing
+}
+
 
 // creates complete (X) or instant (i) TEF events based on the data which could be extracted. All
 // calls without a duration are stored as instant events
-pub fn build_trace_event_format<'a>(event: &'a mut SystemCall,thread_pid_tid_map: &mut HashMap<usize,usize>)-> TEFSystemCall<'a>{
+fn build_trace_event_format_impl<'a>(conf: &crate::Cli,event: &'a mut SystemCall,thread_pid_tid_map: &mut HashMap<usize,usize>)-> TEFSystemCall<'a>{
 
-    let conf = CONFIG.get().unwrap();
 
     let ph_type = match event.call_type {
         CallType::RegularSyscall 
@@ -171,6 +170,162 @@ pub fn build_trace_event_format<'a>(event: &'a mut SystemCall,thread_pid_tid_map
 
     };
     return tef_event;
+
+}
+// abstraction to simplify testing due to oncelock
+pub fn build_trace_event_format<'a>(event: &'a mut SystemCall,thread_pid_tid_map: &mut HashMap<usize,usize>){
+    build_trace_event_format_impl(CONFIG.get().expect("Config not initialized"),event,thread_pid_tid_map);
+}
+
+#[cfg(test)]
+mod tests {
+
+    use crate::Cli;
+    use super::*;
+
+    #[test]
+    fn test_build_trace_event_format(){
+        let mut thread_map = HashMap::from([
+            (27864,27863),
+            (47679,27864),
+        ]);
+        let arg_map = BTreeMap::from([
+            ("flags", ArgValue::One("MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE")),
+        ]);
+        let arg_map_tef = BTreeMap::from([
+            ("flags", ArgValue::One("MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE")),
+            ("ret", ArgValue::One("32")),
+        ]);
+        let arg_map_tef_no_ret = BTreeMap::from([
+            ("flags", ArgValue::One("MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE")),
+        ]);
+
+        let conf = Cli { 
+            input_file: "test_config".to_string(),
+            format: "test_config".to_string(),
+            output_file: "tef".to_string(),
+            parse_arguments: true,
+            log_file: None,
+            no_arg_str_parse: false,
+            disable_syscall_merge: false,
+            thread_aware_tef: false 
+        };
+
+        // system call with return value
+        let mut syscall_with_ret = SystemCall { timestamp: 1766681383946697, tid: 47679, name: "getrandom", args: arg_map.clone(), dur: Some(31), ret: Some("32"), call_type: CallType::RegularSyscall, successful: "successful", procname: "curl" };
+        let tef_event = TEFSystemCall { name: "getrandom", cat: "successful", ph: "X", pid: 47679, tid: 47679, ts: 1766681383946697, dur: Some(31), args: &arg_map_tef };
+        assert_eq!(build_trace_event_format_impl(&conf,&mut syscall_with_ret,&mut thread_map),tef_event);
+
+        // system call without return value
+        let mut syscall_without_ret = SystemCall { timestamp: 1766681383946697, tid: 47679, name: "getrandom", args: arg_map.clone(), dur: Some(31), ret: None, call_type: CallType::RegularSyscall, successful: "successful", procname: "curl" };
+        let tef_event = TEFSystemCall { name: "getrandom", cat: "successful", ph: "X", pid: 47679, tid: 47679, ts: 1766681383946697, dur: Some(31), args: &arg_map_tef_no_ret };
+        assert_eq!(build_trace_event_format_impl(&conf,&mut syscall_without_ret,&mut thread_map),tef_event);
+
+        // unfinished call stored as instant event
+        syscall_without_ret.call_type = CallType::UnfinishedCall;
+        let tef_event = TEFSystemCall { name: "getrandom", cat: "successful", ph: "i", pid: 47679, tid: 47679, ts: 1766681383946697, dur: Some(31), args: &arg_map_tef_no_ret };
+        assert_eq!(build_trace_event_format_impl(&conf,&mut syscall_without_ret,&mut thread_map),tef_event);
+
+        // remapping correct pid for threads
+        /* 
+         * tid -> pid
+            27864->27863
+            47679->27864
+        */
+        let conf = Cli { 
+            input_file: "test_config".to_string(),
+            format: "test_config".to_string(),
+            output_file: "tef".to_string(),
+            parse_arguments: true,
+            log_file: None,
+            no_arg_str_parse: false,
+            disable_syscall_merge: false,
+            thread_aware_tef: true
+        };
+        let mut syscall_with_ret = SystemCall { timestamp: 1766681383946697, tid: 47679, name: "getrandom", args: arg_map.clone(), dur: Some(31), ret: Some("32"), call_type: CallType::RegularSyscall, successful: "successful", procname: "curl" };
+        let tef_event = TEFSystemCall { name: "getrandom", cat: "successful", ph: "X", pid: 27863, tid: 47679, ts: 1766681383946697, dur: Some(31), args: &arg_map_tef };
+        assert_eq!(build_trace_event_format_impl(&conf,&mut syscall_with_ret,&mut thread_map),tef_event);
+    }
+
+    #[test]
+    fn test_handle_partial_system_call(){
+
+        // unfinished and resumed arg strings (fictional arguments)
+        let unf_syscall = SystemCall { 
+            timestamp: 1766681383946697,
+            tid: 47679,
+            name: "getrandom",
+            args: BTreeMap::from([
+            ("args_string", ArgValue::One("uaddr=0xFF, futex_op=FUTEX_WAKE_PRIVATE, val=1")),
+            ("uaddr", ArgValue::One("0xFF")),
+            ("futex_op", ArgValue::One("FUTEX_WAKE_PRIVATE")),
+            ("val", ArgValue::One("1")),
+            ("sigsetsize", ArgValue::One("8)")),
+        ]),
+            dur: None,
+            ret: None,
+            call_type: CallType::UnfinishedCall,
+            successful: "unknown",
+            procname: "curl",
+        };
+
+        let arg_map_res = BTreeMap::from([
+            ("args_string", ArgValue::One(" oldset=NULL, sigsetsize=8)")),
+            ("oldset", ArgValue::One("NULL")),
+            ("ret", ArgValue::One("32")),
+        ]);
+        let resumed_call = SystemCall { 
+            timestamp: 1766681383946698,
+            tid: 47679,
+            name: "getrandom",
+            args: arg_map_res.clone(),
+            dur: Some(31),
+            ret: Some("32"),
+            call_type: CallType::ResumedCallWithArgs,
+            successful: "successful",
+            procname: "curl" 
+        };
+
+        let mut merge_count = 0;
+        let mut syscall_store = Vec::new();
+
+        // nothing matching in store, return resumed call as is
+        assert_eq!(handle_partial_system_call(&mut syscall_store, resumed_call.clone(), &mut merge_count),resumed_call);
+        assert_eq!(merge_count,0);
+
+        // nothing in store, add unf call to store and return it again
+        assert_eq!(handle_partial_system_call(&mut syscall_store, unf_syscall.clone(), &mut merge_count),unf_syscall);
+        assert_eq!(merge_count,0);
+
+
+        let merged_call = SystemCall { 
+            timestamp: 1766681383946697,
+            tid: 47679,
+            name: "getrandom",
+            args: BTreeMap::from([
+            // merged arg string 
+            ("args_string", ArgValue::One("uaddr=0xFF, futex_op=FUTEX_WAKE_PRIVATE, val=1,  oldset=NULL, sigsetsize=8)")),
+            ("uaddr", ArgValue::One("0xFF")),
+            ("futex_op", ArgValue::One("FUTEX_WAKE_PRIVATE")),
+            ("val", ArgValue::One("1")),
+            ("sigsetsize", ArgValue::One("8)")),
+            // res call args
+            ("oldset", ArgValue::One("NULL")),
+            ("ret", ArgValue::One("32")),
+        ]),
+            dur: Some(31),
+            ret: Some("32"),
+            call_type: CallType::RegularSyscall,
+            successful: "successful",
+            procname: "curl" 
+        };
+
+        // matching syscalls found (timestamp, pid and call name), returned merged call
+        assert_eq!(handle_partial_system_call(&mut syscall_store, resumed_call.clone(), &mut merge_count),merged_call);
+        assert_eq!(merge_count,1);
+
+    }
+
 
 }
 

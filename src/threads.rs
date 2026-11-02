@@ -9,7 +9,6 @@ use std::collections::HashMap;
 
 use crate::{arg_values::ArgValue, syscall_parser::SystemCall};
 
-
 // checks arg flag field system calls if a thread was spawned or a process
 // if a thread was spawned with CLONE_THREAD, we store a mapping of the tid and pid in the map to rewrite later
 // returns either the pid for the thread for the syscall or the same as before (determine pid is
@@ -53,6 +52,7 @@ pub fn determine_pid(syscall_tid :usize, pid_tid_map: &HashMap<usize,usize>) -> 
     //  is also a tid key -> get that value and search it until no match. last match wins as the pid
     let mut final_pid = syscall_tid;
 
+    //FIXME infinite loop, if for some reason we store a mapping to the same pid (should not occur normally)
     while let Some(&mapped_pid) = pid_tid_map.get(&final_pid){
         final_pid = mapped_pid;
     };
@@ -78,3 +78,85 @@ fn get_ret_tid(ret_str: &str) -> Option<usize>{
 
 // FIXME fn for deleting mappings on threads that finished with e.g., exit()
 
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use crate::syscall_parser::CallType;
+
+    use super::*;
+
+    #[test]
+    fn test_determine_pid (){
+        // 27863   27863 a.out
+        // 27863   27864 a.out
+        // 27863   27865 a.out
+        let thread_map = HashMap::from([
+            (27864,27863),
+            (27865,27864),
+        ]);
+        assert_eq!(determine_pid(27864,&thread_map),27863);
+        assert_eq!(determine_pid(27865,&thread_map),27863);
+        assert_ne!(determine_pid(27865,&thread_map),27864);
+    }
+
+    #[test]
+    fn test_get_ret_tid (){
+        assert_eq!(get_ret_tid("29830<a.out>"),Some(29830));
+        assert_eq!(get_ret_tid("-1 ERROR"),None);
+    }
+
+    #[test]
+    fn test_thread_map_store(){
+
+        let arg_map_no_arg = BTreeMap::<&str, ArgValue<'_>>::new();
+        let arg_map_no_flag = BTreeMap::from([
+            ("flags", ArgValue::One("MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE")),
+        ]);
+        let arg_map_with_flag = BTreeMap::from([
+            ("flags", ArgValue::One("MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE|CLONE_THREAD")),
+        ]);
+
+        let mut thread_map = HashMap::<usize,usize>::new();
+
+        let mut syscall = SystemCall { 
+            timestamp: 1782053586718126, 
+            tid: 666, 
+            name: "read", 
+            args: arg_map_no_arg,
+            dur: Some(10),
+            ret: Some("29830<a.out>"),
+            call_type: CallType::RegularSyscall,
+            successful: "successful",
+            procname: "a.out", 
+        };
+
+        // 1. check if failure checks DONT store anything
+
+        // wrong syscall name -> return same tid as -> NO STORING
+        assert_eq!(check_for_thread(&mut syscall, &mut thread_map),666);
+
+        syscall.name = "clone3";
+        // no flag argument in hashmap -> return same tid as is -> NO STORING
+        assert_eq!(check_for_thread(&mut syscall, &mut thread_map),666);
+
+        syscall.args = arg_map_no_flag;
+        // no argument in hashmap -> return same tid as is -> NO STORING
+        assert_eq!(check_for_thread(&mut syscall, &mut thread_map),666);
+
+        // check if failure conditions work, map should be empty 
+        // if system call from tid 29830 is invoked -> return tid as is
+        assert_eq!(determine_pid(29830,&thread_map),29830);
+
+        // 2. store mapping and then check if future system call pids are determined by the mapping
+
+        syscall.args = arg_map_with_flag;
+        // store mapping tid: (29830,666)
+        assert_eq!(check_for_thread(&mut syscall, &mut thread_map),666);
+
+        // check if mapping works if system call from tid 29830 is invoked
+        assert_eq!(determine_pid(29830,&thread_map),666);
+
+    }
+
+
+}

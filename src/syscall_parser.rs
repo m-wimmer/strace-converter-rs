@@ -15,9 +15,8 @@ use crate::keys::ARGS_STRING;
 use crate::{CONFIG, argument_iterator,arg_values::ArgValue,arg_values::OwnedArgValue};
 
 
-#[derive(Debug)]
 #[derive(serde::Serialize)]
-#[derive(Clone)]
+#[derive(Clone,PartialEq,Debug)]
 pub struct SystemCall<'a> {
     pub timestamp: u64,
     pub tid: usize,
